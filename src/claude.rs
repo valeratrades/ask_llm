@@ -114,12 +114,13 @@ pub async fn ask_claude<T: AsRef<str>>(conversation: &Conversation, model: Model
 	let api_key = std::env::var("CLAUDE_TOKEN").expect("CLAUDE_TOKEN environment variable not set");
 	let url = "https://api.anthropic.com/v1/messages";
 
-	// Headers
+	// Header {{{
 	let mut headers = HeaderMap::new();
 	headers.insert("x-api-key", HeaderValue::from_str(&api_key).unwrap());
 	headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01")); // API standard edition, does not influence model versions
 	headers.insert("anthropic-beta", HeaderValue::from_static("output-128k-2025-02-19")); // allows for 128k tokens output on newer models
 	headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+	//,}}}
 
 	let request_builder = Client::new().post(url).headers(headers);
 
@@ -137,7 +138,7 @@ pub async fn ask_claude<T: AsRef<str>>(conversation: &Conversation, model: Model
 		_ => claude_model.max_tokens(),
 	};
 
-	// Payload
+	// Payload {{{
 	let mut payload = json!({
 		"model": claude_model.to_str(),
 		"temperature": 0.0,
@@ -151,6 +152,7 @@ pub async fn ask_claude<T: AsRef<str>>(conversation: &Conversation, model: Model
 	if let Some(system_message) = system_message {
 		payload.as_object_mut().unwrap().insert("system".to_string(), serde_json::json!(system_message));
 	}
+	//,}}}
 
 	Ok(match requested_max_tokens {
 		Some(max_tokens) if max_tokens < 4096 => {
