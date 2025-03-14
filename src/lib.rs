@@ -16,7 +16,7 @@ pub async fn conversation(conv: &Conversation, model: Model, max_tokens: Option<
 	claude::ask_claude(conv, model, max_tokens, stop_sequences).await
 }
 
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Debug, Copy, derive_more::FromStr)]
 pub enum Model {
 	Fast,
 	Medium,

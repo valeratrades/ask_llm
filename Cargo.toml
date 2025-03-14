@@ -39,6 +39,21 @@ tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 v_utils = "2.6.2"
 
+# Optional {{{
+clap = { version = "^4.5.32", features = ["derive"], optional = true }
+#,}}}
+
+[features]
+cli = ["dep:clap"]
+
+default = ["cli"]
+full = ["cli"]
+
+[[bin]]
+name = "ask_llm"
+path = "./src/main.rs"
+required-features = ["cli"]
+
 [[examples]]
 name = "async"
 path = "../examples/async.rs"

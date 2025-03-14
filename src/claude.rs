@@ -155,7 +155,7 @@ pub async fn ask_claude<T: AsRef<str>>(conversation: &Conversation, model: Model
 	//,}}}
 
 	Ok(match requested_max_tokens {
-		Some(max_tokens) if max_tokens < 4096 => {
+		Some(max_tokens) if max_tokens <= 4096 => {
 			payload.as_object_mut().unwrap().insert("stream".to_owned(), serde_json::json!(false));
 			tracing::info!("getting through a rest get");
 			tracing::debug!(?payload);
