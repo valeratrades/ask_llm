@@ -2,7 +2,7 @@ cargo-features = ["codegen-backend"]
 [package]
 name = "ask_llm"
 version = "0.1.0"
-license-path = "LICENSE"
+license = "Blue Oak 1.0.0"
 description = "make a request to whatever llm is the best these days, without hardcoding model/provider"
 readme = "README.md"
 edition = "2024"
