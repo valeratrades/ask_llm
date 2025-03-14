@@ -36,6 +36,10 @@ tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
 v_utils = "2.6.2"
 
-[examples]
+[[examples]]
 name = "async"
 path = "../examples/async.rs"
+
+[[examples]]
+name = "codeblocks"
+path = "../examples/codeblocks.rs"

@@ -75,28 +75,55 @@ impl std::fmt::Display for Response {
 	}
 }
 impl Response {
-	pub fn extract_codeblocks(&self, extension: &str) -> Result<Vec<String>> {
-		let extracted: Vec<String> = self
-			.text
+	/// Extract codeblocks with optional extension filtering.
+	/// If extensions is None or empty, all codeblocks are returned.
+	/// Extensions are tried in reverse sorted order (longer extensions first).
+	/// Returns an empty Vec if no matching codeblocks are found.
+	pub fn extract_codeblocks(&self, extensions: Option<Vec<&str>>) -> Vec<String> {
+		let sorted_extensions = extensions.map(|mut exts| {
+			exts.sort_by_key(|b| std::cmp::Reverse(b.len())); // sort, with longer first (so "pytho" goes before "py")
+			exts
+		});
+
+		self.text
 			.split("```")
 			.enumerate()
 			.filter_map(|(i, s)| {
-				if i % 2 == 1 /*When we don't have an extension to match on, this is the only way to get separate text inside and outside codeblock delimiters*/ && s.starts_with(extension) {
-					Some(s.strip_prefix(extension).unwrap().trim().to_string())
+				if i % 2 == 1 {
+					match &sorted_extensions {
+						Some(exts) if !exts.is_empty() => {
+							for ext in exts {
+								if s.starts_with(ext) {
+									return Some(s.strip_prefix(ext).unwrap().trim().to_string());
+								}
+							}
+							None // No matching extension found
+						}
+						_ => {
+							// No extensions specified or empty vec, strip all language identifiers
+							let code = match s.split_once('\n') {
+								Some((_, rest)) => rest.trim().to_string(),
+								_ => s.trim().to_string(),
+							};
+							Some(code)
+						}
+					}
 				} else {
 					None
 				}
 			})
-			.collect();
-		match extracted.is_empty() {
-			true => bail!("Failed to find any {extension} codeblocks in the response:\nResponse: {}", self.text),
-			false => Ok(extracted),
-		}
+			.collect()
 	}
 
-	pub fn extract_codeblock(&self, extension: &str) -> Result<String> {
-		let extracted = self.extract_codeblocks(extension)?; // because performance does not matter. Could use `find` here over `filter` there, but ehh
-		Ok(extracted[0].clone())
+	/// Convenience wrapper around [extract_codeblocks](#method.extract_codeblocks).
+	/// Returns an error unless exactly one codeblock is found.
+	pub fn extract_codeblock(&self, extensions: Option<Vec<&str>>) -> Result<String> {
+		let blocks = self.extract_codeblocks(extensions);
+		if blocks.len() == 1 {
+			Ok(blocks.into_iter().next().unwrap())
+		} else {
+			bail!("No codeblocks found or more than one codeblock found.")
+		}
 	}
 
 	pub fn extract_html_tag(&self, tag_name: &str) -> Result<String> {
