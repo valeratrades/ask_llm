@@ -9,10 +9,10 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Conversation, LlmConversation, Model, Response, Role};
+use crate::{Conversation, Model, Response, Role};
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 /// ref: https://docs.anthropic.com/en/docs/about-claude/models/all-models
 enum ClaudeModel {
 	Haiku35,
@@ -276,3 +276,12 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 	}
 }
 //,}}}
+
+#[cfg(test)]
+mod tests {
+	#[test]
+	fn deser_model() {
+		let model = "claude-3-5-haiku-20241022".parse::<super::ClaudeModel>().unwrap();
+		assert_eq!(model, super::ClaudeModel::Haiku35);
+	}
+}

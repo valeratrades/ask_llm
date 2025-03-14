@@ -1,5 +1,4 @@
 use eyre::{Result, bail};
-use serde::Serialize;
 
 //TODO: add reading conversation from json file or directory of json files
 
@@ -108,8 +107,4 @@ impl Response {
 
 		Ok(extracted.to_string())
 	}
-}
-
-trait LlmConversation: Serialize {
-	fn new(conversation: &Conversation) -> Self;
 }
