@@ -17,6 +17,7 @@ use crate::{Conversation, Model, Response, Role};
 enum ClaudeModel {
 	Haiku35,
 	Sonnet37,
+	Sonnet4,
 	Opus3,
 }
 impl ClaudeModel {
@@ -24,6 +25,7 @@ impl ClaudeModel {
 		match self {
 			ClaudeModel::Haiku35 => "claude-3-5-haiku-latest",
 			ClaudeModel::Sonnet37 => "claude-3-7-sonnet-latest",
+			ClaudeModel::Sonnet4 => "claude-4-sonnet-latest",
 			ClaudeModel::Opus3 => "claude-3-opus-latert",
 		}
 	}
@@ -39,6 +41,10 @@ impl ClaudeModel {
 				million_input_tokens: 3.0,
 				million_output_tokens: 15.0,
 			},
+			Self::Sonnet4 => Cost {
+				million_input_tokens: 3.0,
+				million_output_tokens: 15.0,
+			},
 			Self::Opus3 => Cost {
 				million_input_tokens: 15.0,
 				million_output_tokens: 75.0,
@@ -50,6 +56,7 @@ impl ClaudeModel {
 		match self {
 			Self::Haiku35 => 8192,
 			Self::Sonnet37 => 128_000, //NB: assumes inclusion of "output-128k-2025-02-19" header
+			Self::Sonnet4 => 128_000,
 			Self::Opus3 => 4096,
 		}
 	}
@@ -71,8 +78,8 @@ impl From<Model> for ClaudeModel {
 	fn from(model: Model) -> Self {
 		match model {
 			Model::Fast => Self::Haiku35,
-			Model::Medium => Self::Sonnet37,
-			Model::Slow => Self::Sonnet37, // as of (2025/03/14) Opus happens to be too outdated to consider
+			Model::Medium => Self::Sonnet4,
+			Model::Slow => Self::Sonnet4, // as of (2025/06/29) Opus happens to be too outdated to consider
 		}
 	}
 }
