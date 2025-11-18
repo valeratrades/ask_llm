@@ -295,6 +295,12 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 		eprintln!("Failed to parse Claude response. Response JSON: {}", serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value)));
 		e
 	})?;
+
+	// Check for refusal
+	if response.stop_reason == "refusal" {
+		bail!("Claude refused to process the request. This may be due to content policy restrictions.");
+	}
+
 	//let response = request_builder.send().await?.json::<ClaudeResponse>().await?;
 	return Ok(response.into());
 
