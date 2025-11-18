@@ -260,10 +260,10 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: ClaudeModel) ->
 			.collect::<Vec<String>>();
 
 		for s in split {
-			if let Ok(v) = serde_json::from_str::<DeltaContentBlock>(&s) {
-				if v.response_type == "content_block_delta" || v.delta.delta_type == "text_delta" {
-					parsed_string.push_str(&v.delta.text);
-				}
+			if let Ok(v) = serde_json::from_str::<DeltaContentBlock>(&s)
+				&& (v.response_type == "content_block_delta" || v.delta.delta_type == "text_delta")
+			{
+				parsed_string.push_str(&v.delta.text);
 			}
 		}
 		parsed_string
@@ -287,12 +287,11 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: ClaudeModel) ->
 async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 	let value = request_builder.send().await?.json::<Value>().await?;
 	tracing::debug!(?value);
-	let response = serde_json::from_value::<ClaudeResponse>(value.clone()).map_err(|e| {
+	let response = serde_json::from_value::<ClaudeResponse>(value.clone()).inspect_err(|e| {
 		eprintln!(
-			"Failed to parse Claude response. Response JSON: {}",
+			"Failed to parse Claude response. Response JSON: {}\n{e:?}",
 			serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value))
 		);
-		e
 	})?;
 
 	// Check for refusal
