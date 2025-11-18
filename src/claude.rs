@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use crate::{Conversation, Model, Response, Role};
 
 #[allow(dead_code)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Eq, PartialEq)]
 /// ref: https://docs.claude.com/en/docs/about-claude/models/all-models
 enum ClaudeModel {
 	Haiku45,
@@ -127,17 +127,13 @@ impl From<&Conversation> for ClaudeConversation {
 
 			let content = match &message.content {
 				MessageContent::Text(text) => ClaudeMessageContent::Text(text.clone()),
-				MessageContent::Image { base64_data, media_type } => {
-					ClaudeMessageContent::ContentBlocks(vec![
-						ClaudeContentBlock::Image {
-							source: ImageSource {
-								source_type: "base64".to_string(),
-								media_type: media_type.clone(),
-								data: base64_data.clone(),
-							}
-						}
-					])
-				}
+				MessageContent::Image { base64_data, media_type } => ClaudeMessageContent::ContentBlocks(vec![ClaudeContentBlock::Image {
+					source: ImageSource {
+						source_type: "base64".to_string(),
+						media_type: media_type.clone(),
+						data: base64_data.clone(),
+					},
+				}]),
 				MessageContent::TextAndImages { text, images } => {
 					let mut blocks = vec![ClaudeContentBlock::Text { text: text.clone() }];
 					for img in images {
@@ -146,7 +142,7 @@ impl From<&Conversation> for ClaudeConversation {
 								source_type: "base64".to_string(),
 								media_type: img.media_type.clone(),
 								data: img.base64_data.clone(),
-							}
+							},
 						});
 					}
 					ClaudeMessageContent::ContentBlocks(blocks)
@@ -222,13 +218,13 @@ pub async fn ask_claude<T: AsRef<str>>(conversation: &Conversation, model: Model
 	})
 }
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 struct ClaudeContent {
 	#[serde(rename = "type")]
 	content_type: String,
 	text: String,
 }
-#[derive(Deserialize, Debug)]
+#[derive(Debug, Deserialize)]
 struct ClaudeUsage {
 	input_tokens: u32,
 	output_tokens: u32,
@@ -236,13 +232,13 @@ struct ClaudeUsage {
 
 // stream {{{
 async fn stream(request_builder: reqwest::RequestBuilder, model: ClaudeModel) -> Result<Response> {
-	#[derive(Debug, Serialize, Deserialize)]
+	#[derive(Debug, Deserialize, Serialize)]
 	struct Delta {
 		text: String,
 		#[serde(rename = "type")]
 		delta_type: String,
 	}
-	#[derive(Debug, Serialize, Deserialize)]
+	#[derive(Debug, Deserialize, Serialize)]
 	struct DeltaContentBlock {
 		delta: Delta,
 		index: u32,
@@ -292,7 +288,10 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 	let value = request_builder.send().await?.json::<Value>().await?;
 	tracing::debug!(?value);
 	let response = serde_json::from_value::<ClaudeResponse>(value.clone()).map_err(|e| {
-		eprintln!("Failed to parse Claude response. Response JSON: {}", serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value)));
+		eprintln!(
+			"Failed to parse Claude response. Response JSON: {}",
+			serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value))
+		);
 		e
 	})?;
 
@@ -305,7 +304,7 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 	return Ok(response.into());
 
 	#[allow(dead_code)]
-	#[derive(Deserialize, Debug)]
+	#[derive(Debug, Deserialize)]
 	pub struct ClaudeResponse {
 		id: String,
 		#[serde(rename = "type")]

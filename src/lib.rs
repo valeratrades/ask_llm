@@ -16,33 +16,33 @@ pub async fn conversation(conv: &Conversation, model: Model, max_tokens: Option<
 	claude::ask_claude(conv, model, max_tokens, stop_sequences).await
 }
 
-#[derive(Clone, Debug, Copy, derive_more::FromStr)]
+#[derive(Clone, Copy, Debug, derive_more::FromStr)]
 pub enum Model {
 	Fast,
 	Medium,
 	Slow,
 }
-#[derive(Clone, Debug, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum Role {
 	System,
 	User,
 	Assistant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub enum MessageContent {
 	Text(String),
 	Image { base64_data: String, media_type: String },
 	TextAndImages { text: String, images: Vec<ImageContent> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ImageContent {
 	pub base64_data: String,
 	pub media_type: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct Message {
 	role: Role,
 	content: MessageContent,
