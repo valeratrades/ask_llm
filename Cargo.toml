@@ -13,17 +13,17 @@ edition = "2024"
 [package.metadata.docs.rs]
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
 
-[lints.clippy]
-# Stable
-float_cmp = "allow" # is bad for `==` direct comparisons, but `<` and `>` should be allowed
-len_zero = "allow" # `.empty()` is O(1) but on &str only
-undocumented_unsafe_blocks = "warn"
-tabs_in_doc_comments = "allow"
+[[bin]]
+name = "ask_llm"
+path = "./src/main.rs"
+required-features = ["cli"]
+#,}}}
 
-# Questionable
-# const fns, so actually more performant
-get_first = "allow"
-get_last_with_len = "allow"
+[features]
+cli = ["dep:clap"]
+
+default = ["cli"]
+full = ["cli"]
 
 [dependencies]
 bytes = "1.10.1"
@@ -41,18 +41,18 @@ v_utils = "2.6.2"
 
 # Optional {{{
 clap = { version = "^4.5.32", features = ["derive"], optional = true }
-#,}}}
 
-[features]
-cli = ["dep:clap"]
+[lints.clippy]
+# Stable
+float_cmp = "allow" # is bad for `==` direct comparisons, but `<` and `>` should be allowed
+len_zero = "allow" # `.empty()` is O(1) but on &str only
+undocumented_unsafe_blocks = "warn"
+tabs_in_doc_comments = "allow"
 
-default = ["cli"]
-full = ["cli"]
-
-[[bin]]
-name = "ask_llm"
-path = "./src/main.rs"
-required-features = ["cli"]
+# Questionable
+# const fns, so actually more performant
+get_first = "allow"
+get_last_with_len = "allow"
 
 [[examples]]
 name = "async"
