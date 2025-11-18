@@ -13,39 +13,33 @@ use crate::{Conversation, Model, Response, Role};
 
 #[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
-/// ref: https://docs.anthropic.com/en/docs/about-claude/models/all-models
+/// ref: https://docs.claude.com/en/docs/about-claude/models/all-models
 enum ClaudeModel {
-	Haiku35,
-	Sonnet37,
-	Sonnet4,
-	Opus3,
+	Haiku45,
+	Sonnet45,
+	Opus41,
 }
 impl ClaudeModel {
 	fn to_str(&self) -> &str {
 		match self {
-			ClaudeModel::Haiku35 => "claude-3-5-haiku-latest",
-			ClaudeModel::Sonnet37 => "claude-3-7-sonnet-latest",
-			ClaudeModel::Sonnet4 => "claude-4-sonnet-latest",
-			ClaudeModel::Opus3 => "claude-3-opus-latert",
+			ClaudeModel::Haiku45 => "claude-haiku-4-5",
+			ClaudeModel::Sonnet45 => "claude-sonnet-4-5",
+			ClaudeModel::Opus41 => "claude-opus-4-1",
 		}
 	}
 
 	///NB: could end up being outdated, as I freely use "-latest" marker in model defs
 	pub fn cost(&self) -> Cost {
 		match self {
-			Self::Haiku35 => Cost {
-				million_input_tokens: 0.8,
-				million_output_tokens: 4.0,
+			Self::Haiku45 => Cost {
+				million_input_tokens: 1.0,
+				million_output_tokens: 5.0,
 			},
-			Self::Sonnet37 => Cost {
+			Self::Sonnet45 => Cost {
 				million_input_tokens: 3.0,
 				million_output_tokens: 15.0,
 			},
-			Self::Sonnet4 => Cost {
-				million_input_tokens: 3.0,
-				million_output_tokens: 15.0,
-			},
-			Self::Opus3 => Cost {
+			Self::Opus41 => Cost {
 				million_input_tokens: 15.0,
 				million_output_tokens: 75.0,
 			},
@@ -54,10 +48,9 @@ impl ClaudeModel {
 
 	pub fn max_tokens(&self) -> usize {
 		match self {
-			Self::Haiku35 => 8192,
-			Self::Sonnet37 => 128_000, //NB: assumes inclusion of "output-128k-2025-02-19" header
-			Self::Sonnet4 => 128_000,
-			Self::Opus3 => 4096,
+			Self::Haiku45 => 64_000,
+			Self::Sonnet45 => 64_000,
+			Self::Opus41 => 32_000,
 		}
 	}
 }
@@ -66,9 +59,9 @@ impl std::str::FromStr for ClaudeModel {
 
 	fn from_str(s: &str) -> Result<Self> {
 		Ok(match s {
-			_ if s.to_lowercase().contains("haiku") => Self::Haiku35,
-			_ if s.to_lowercase().contains("sonnet") => Self::Sonnet37,
-			_ if s.to_lowercase().contains("opus") => Self::Opus3,
+			_ if s.to_lowercase().contains("haiku") => Self::Haiku45,
+			_ if s.to_lowercase().contains("sonnet") => Self::Sonnet45,
+			_ if s.to_lowercase().contains("opus") => Self::Opus41,
 			_ => bail!("Unknown model: {s}"),
 		})
 	}
@@ -77,9 +70,9 @@ impl std::str::FromStr for ClaudeModel {
 impl From<Model> for ClaudeModel {
 	fn from(model: Model) -> Self {
 		match model {
-			Model::Fast => Self::Haiku35,
-			Model::Medium => Self::Sonnet4,
-			Model::Slow => Self::Sonnet4, // as of (2025/06/29) Opus happens to be too outdated to consider
+			Model::Fast => Self::Haiku45,
+			Model::Medium => Self::Sonnet45,
+			Model::Slow => Self::Opus41,
 		}
 	}
 }
@@ -89,32 +82,84 @@ pub struct Cost {
 }
 
 #[derive(Debug, Serialize)]
-struct ClaudeMessage<'a> {
+#[serde(untagged)]
+enum ClaudeMessageContent {
+	Text(String),
+	ContentBlocks(Vec<ClaudeContentBlock>),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum ClaudeContentBlock {
+	#[serde(rename = "text")]
+	Text { text: String },
+	#[serde(rename = "image")]
+	Image { source: ImageSource },
+}
+
+#[derive(Debug, Serialize)]
+struct ImageSource {
+	#[serde(rename = "type")]
+	source_type: String,
+	media_type: String,
+	data: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ClaudeMessage {
 	role: &'static str,
-	content: &'a str,
+	content: ClaudeMessageContent,
 }
 #[derive(Debug, Serialize)]
-struct ClaudeConversation<'a> {
-	messages: Vec<ClaudeMessage<'a>>,
+struct ClaudeConversation {
+	messages: Vec<ClaudeMessage>,
 }
-impl<'a> From<&'a Conversation> for ClaudeConversation<'a> {
-	fn from(conversation: &'a Conversation) -> Self {
+impl From<&Conversation> for ClaudeConversation {
+	fn from(conversation: &Conversation) -> Self {
+		use crate::MessageContent;
 		let mut messages = Vec::new();
 		for message in &conversation.0 {
-			messages.push(ClaudeMessage {
-				role: match message.role {
-					Role::System => "system",
-					Role::User => "user",
-					Role::Assistant => "assistant",
-				},
-				content: &message.content,
-			});
+			let role = match message.role {
+				Role::System => "system",
+				Role::User => "user",
+				Role::Assistant => "assistant",
+			};
+
+			let content = match &message.content {
+				MessageContent::Text(text) => ClaudeMessageContent::Text(text.clone()),
+				MessageContent::Image { base64_data, media_type } => {
+					ClaudeMessageContent::ContentBlocks(vec![
+						ClaudeContentBlock::Image {
+							source: ImageSource {
+								source_type: "base64".to_string(),
+								media_type: media_type.clone(),
+								data: base64_data.clone(),
+							}
+						}
+					])
+				}
+				MessageContent::TextAndImages { text, images } => {
+					let mut blocks = vec![ClaudeContentBlock::Text { text: text.clone() }];
+					for img in images {
+						blocks.push(ClaudeContentBlock::Image {
+							source: ImageSource {
+								source_type: "base64".to_string(),
+								media_type: img.media_type.clone(),
+								data: img.base64_data.clone(),
+							}
+						});
+					}
+					ClaudeMessageContent::ContentBlocks(blocks)
+				}
+			};
+
+			messages.push(ClaudeMessage { role, content });
 		}
 		Self { messages }
 	}
 }
 
-///docs: https://docs.anthropic.com/claude/reference/messages_post
+///docs: https://docs.claude.com/claude/reference/messages_post
 pub async fn ask_claude<T: AsRef<str>>(conversation: &Conversation, model: Model, requested_max_tokens: Option<usize>, stop_sequences: Option<Vec<T>>) -> Result<Response> {
 	let mut conversation = ClaudeConversation::from(conversation);
 
@@ -246,7 +291,10 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: ClaudeModel) ->
 async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 	let value = request_builder.send().await?.json::<Value>().await?;
 	tracing::debug!(?value);
-	let response = serde_json::from_value::<ClaudeResponse>(value)?;
+	let response = serde_json::from_value::<ClaudeResponse>(value.clone()).map_err(|e| {
+		eprintln!("Failed to parse Claude response. Response JSON: {}", serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value)));
+		e
+	})?;
 	//let response = request_builder.send().await?.json::<ClaudeResponse>().await?;
 	return Ok(response.into());
 
@@ -290,7 +338,7 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 mod tests {
 	#[test]
 	fn deser_model() {
-		let model = "claude-3-5-haiku-20241022".parse::<super::ClaudeModel>().unwrap();
-		assert_eq!(model, super::ClaudeModel::Haiku35);
+		let model = "claude-haiku-4-5-20251001".parse::<super::ClaudeModel>().unwrap();
+		assert_eq!(model, super::ClaudeModel::Haiku45);
 	}
 }

@@ -28,16 +28,44 @@ pub enum Role {
 	User,
 	Assistant,
 }
+
+#[derive(Debug, Clone)]
+pub enum MessageContent {
+	Text(String),
+	Image { base64_data: String, media_type: String },
+	TextAndImages { text: String, images: Vec<ImageContent> },
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageContent {
+	pub base64_data: String,
+	pub media_type: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Message {
 	role: Role,
-	content: String,
+	content: MessageContent,
 }
 impl Message {
 	fn new<T: AsRef<str>>(role: Role, content: T) -> Self {
 		Self {
 			role,
-			content: content.as_ref().to_string(),
+			content: MessageContent::Text(content.as_ref().to_string()),
+		}
+	}
+
+	pub fn new_with_image(role: Role, base64_data: String, media_type: String) -> Self {
+		Self {
+			role,
+			content: MessageContent::Image { base64_data, media_type },
+		}
+	}
+
+	pub fn new_with_text_and_images(role: Role, text: String, images: Vec<ImageContent>) -> Self {
+		Self {
+			role,
+			content: MessageContent::TextAndImages { text, images },
 		}
 	}
 }
