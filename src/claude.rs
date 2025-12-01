@@ -9,7 +9,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Conversation, Model, Response, Role};
+use crate::{Conversation, Model, Response, Role, config};
 
 #[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq)]
@@ -156,10 +156,19 @@ impl From<&Conversation> for ClaudeConversation {
 }
 
 ///docs: https://docs.claude.com/claude/reference/messages_post
-pub async fn ask_claude<T: AsRef<str>>(conversation: &Conversation, model: Model, requested_max_tokens: Option<usize>, stop_sequences: Option<Vec<T>>) -> Result<Response> {
+pub async fn ask_claude<T: AsRef<str>>(
+	conversation: &Conversation,
+	model: Model,
+	temperature: Option<f32>,
+	requested_max_tokens: Option<usize>,
+	stop_sequences: Option<Vec<T>>,
+) -> Result<Response> {
 	let mut conversation = ClaudeConversation::from(conversation);
 
-	let api_key = std::env::var("CLAUDE_TOKEN").expect("CLAUDE_TOKEN environment variable not set");
+	let api_key = config::get()
+		.claude_token
+		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+		.expect("CLAUDE_TOKEN not set in config or environment");
 	let url = "https://api.anthropic.com/v1/messages";
 
 	// Header {{{
@@ -189,7 +198,7 @@ pub async fn ask_claude<T: AsRef<str>>(conversation: &Conversation, model: Model
 	// Payload {{{
 	let mut payload = json!({
 		"model": claude_model.to_str(),
-		"temperature": 0.0,
+		"temperature": temperature.unwrap_or(0.0),
 		"max_tokens": max_tokens,
 		"messages": conversation.messages
 	});

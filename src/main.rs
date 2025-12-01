@@ -1,4 +1,4 @@
-use ask_llm::*;
+use ask_llm::{Client, config};
 use clap::Parser;
 
 #[derive(Debug, Parser)]
@@ -10,6 +10,8 @@ struct Cli {
 	/// If true, will avoid streaming (caps response at 4096 tokens)
 	#[clap(short, long)]
 	fast: bool,
+	#[command(flatten)]
+	settings: config::SettingsFlags,
 }
 
 #[tokio::main]
@@ -17,10 +19,13 @@ async fn main() {
 	v_utils::clientside!();
 	let cli = Cli::parse();
 
-	let mut conv = Conversation::new();
-	conv.add(Role::User, cli.question);
-	let max_tokens = if cli.fast { Some(4096) } else { None };
-	let answer = conversation(&conv, cli.model, max_tokens, None).await.unwrap().text;
+	let _ = config::init(cli.settings);
+
+	let mut client = Client::new().model(cli.model);
+	if cli.fast {
+		client = client.max_tokens(4096);
+	}
+	let answer = client.ask(cli.question).await.unwrap().text;
 
 	println!("{answer:#}");
 }

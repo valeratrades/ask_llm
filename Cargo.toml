@@ -1,7 +1,7 @@
 cargo-features = ["codegen-backend"]
 [package]
 name = "ask_llm"
-version = "0.2.0"
+version = "1.0.0"
 license = "MIT"
 description = "make a request to whatever llm is the best these days, without hardcoding model/provider"
 documentation = "https://github.com/valeratrades/ask_llm/tree/master/README.md"
@@ -37,7 +37,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1.41"
-v_utils = "2.6.2"
+v_utils = { version = "2.6.2", features = ["cli"] }
 
 # Optional {{{
 clap = { version = "^4.5.32", features = ["derive"], optional = true }
@@ -54,10 +54,10 @@ tabs_in_doc_comments = "allow"
 get_first = "allow"
 get_last_with_len = "allow"
 
-[[examples]]
+[[example]]
 name = "async"
-path = "../examples/async.rs"
+path = "examples/async.rs"
 
-[[examples]]
+[[example]]
 name = "codeblocks"
-path = "../examples/codeblocks.rs"
+path = "examples/codeblocks.rs"

@@ -1,27 +1,62 @@
 use eyre::{Result, bail};
 
-//TODO: add reading conversation from json file or directory of json files
-
-mod blocking;
 mod claude;
+pub mod config;
+mod shortcuts;
+pub use shortcuts::*;
 
-pub async fn oneshot<T: AsRef<str>>(message: T, model: Model) -> Result<Response> {
-	let mut conv = Conversation::new();
-	conv.add(Role::User, message);
-	conversation(&conv, model, None, None).await
+/// Client for interacting with LLMs.
+///
+/// Default settings produce a simple oneshot call with Model::Medium.
+#[derive(Clone, Debug, Default)]
+pub struct Client {
+	pub model: Model,
+	pub temperature: Option<f32>,
+	pub max_tokens: Option<usize>,
+	pub stop_sequences: Option<Vec<String>>,
 }
 
-//TODO!: determine whether streaming is in order based on the length of the input. Or just always streaem.
-pub async fn conversation(conv: &Conversation, model: Model, max_tokens: Option<usize>, stop_sequences: Option<Vec<&str>>) -> Result<Response> {
-	claude::ask_claude(conv, model, max_tokens, stop_sequences).await
+impl Client {
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	pub fn model(mut self, model: Model) -> Self {
+		self.model = model;
+		self
+	}
+
+	pub fn temperature(mut self, temperature: f32) -> Self {
+		self.temperature = Some(temperature);
+		self
+	}
+
+	pub fn max_tokens(mut self, max_tokens: usize) -> Self {
+		self.max_tokens = Some(max_tokens);
+		self
+	}
+
+	pub fn stop_sequences<T: Into<String>>(mut self, sequences: Vec<T>) -> Self {
+		self.stop_sequences = Some(sequences.into_iter().map(Into::into).collect());
+		self
+	}
+
+	pub async fn ask(&self, message: impl Into<String>) -> Result<Response> {
+		let mut conv = Conversation::new();
+		conv.add(Role::User, message.into());
+		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+		claude::ask_claude(&conv, self.model, self.temperature, self.max_tokens, stop_seqs).await
+	}
 }
 
-#[derive(Clone, Copy, Debug, derive_more::FromStr)]
+#[derive(Clone, Copy, Debug, Default, derive_more::FromStr)]
 pub enum Model {
 	Fast,
+	#[default]
 	Medium,
 	Slow,
 }
+
 #[derive(Clone, Copy, Debug)]
 pub enum Role {
 	System,
@@ -44,14 +79,15 @@ pub struct ImageContent {
 
 #[derive(Clone, Debug)]
 pub struct Message {
-	role: Role,
-	content: MessageContent,
+	pub(crate) role: Role,
+	pub(crate) content: MessageContent,
 }
+
 impl Message {
-	fn new<T: AsRef<str>>(role: Role, content: T) -> Self {
+	fn new(role: Role, content: impl Into<String>) -> Self {
 		Self {
 			role,
-			content: MessageContent::Text(content.as_ref().to_string()),
+			content: MessageContent::Text(content.into()),
 		}
 	}
 
@@ -78,15 +114,15 @@ impl Conversation {
 		Self(Vec::new())
 	}
 
-	pub fn new_with_system<T: AsRef<str>>(system_message: T) -> Self {
+	pub fn new_with_system(system_message: impl Into<String>) -> Self {
 		Self(vec![Message::new(Role::System, system_message)])
 	}
 
-	pub fn add<T: AsRef<str>>(&mut self, role: Role, content: T) {
+	pub fn add(&mut self, role: Role, content: impl Into<String>) {
 		self.0.push(Message::new(role, content));
 	}
 
-	pub fn add_exchange<T: AsRef<str>>(&mut self, user_message: T, assistant_message: T) {
+	pub fn add_exchange(&mut self, user_message: impl Into<String>, assistant_message: impl Into<String>) {
 		self.add(Role::User, user_message);
 		self.add(Role::Assistant, assistant_message);
 	}
@@ -97,11 +133,13 @@ pub struct Response {
 	pub text: String,
 	pub cost_cents: f32,
 }
+
 impl std::fmt::Display for Response {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(f, "Response: {}\nCost (cents): {}", self.text, self.cost_cents)
 	}
 }
+
 impl Response {
 	/// Extract codeblocks with optional extension filtering.
 	/// If extensions is None or empty, all codeblocks are returned.
@@ -109,7 +147,7 @@ impl Response {
 	/// Returns an empty Vec if no matching codeblocks are found.
 	pub fn extract_codeblocks(&self, extensions: Option<Vec<&str>>) -> Vec<String> {
 		let sorted_extensions = extensions.map(|mut exts| {
-			exts.sort_by_key(|b| std::cmp::Reverse(b.len())); // sort, with longer first (so "pytho" goes before "py")
+			exts.sort_by_key(|b| std::cmp::Reverse(b.len()));
 			exts
 		});
 
@@ -125,10 +163,9 @@ impl Response {
 									return Some(s.strip_prefix(ext).unwrap().trim().to_string());
 								}
 							}
-							None // No matching extension found
+							None
 						}
 						_ => {
-							// No extensions specified or empty vec, strip all language identifiers
 							let code = match s.split_once('\n') {
 								Some((_, rest)) => rest.trim().to_string(),
 								_ => s.trim().to_string(),
@@ -157,9 +194,8 @@ impl Response {
 	pub fn extract_html_tag(&self, tag_name: &str) -> Result<String> {
 		let opening_tag = format!("<{}>", tag_name);
 		let closing_tag = format!("</{}>", tag_name);
-		let from_start = self.text.split_once(&opening_tag).unwrap().1; //TODO: handle error
-		let extracted = from_start.split_once(&closing_tag).unwrap().0; //TODO: handle error
-
+		let from_start = self.text.split_once(&opening_tag).unwrap().1;
+		let extracted = from_start.split_once(&closing_tag).unwrap().0;
 		Ok(extracted.to_string())
 	}
 }
