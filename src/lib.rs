@@ -1,6 +1,22 @@
 use eyre::{Result, bail};
 
 mod claude;
+
+fn mime_type_from_extension(ext: &str) -> &'static str {
+	match ext.to_lowercase().as_str() {
+		"pdf" => "application/pdf",
+		"txt" => "text/plain",
+		"md" => "text/markdown",
+		"csv" => "text/csv",
+		"docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"png" => "image/png",
+		"jpg" | "jpeg" => "image/jpeg",
+		"gif" => "image/gif",
+		"webp" => "image/webp",
+		_ => "application/octet-stream",
+	}
+}
 pub mod config;
 mod shortcuts;
 pub use shortcuts::*;
@@ -14,6 +30,14 @@ pub struct Client {
 	pub temperature: Option<f32>,
 	pub max_tokens: Option<usize>,
 	pub stop_sequences: Option<Vec<String>>,
+	pub force_json: bool,
+	pub files: Vec<FileAttachment>,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileAttachment {
+	pub base64_data: String,
+	pub media_type: String,
 }
 
 impl Client {
@@ -41,11 +65,39 @@ impl Client {
 		self
 	}
 
+	pub fn force_json(mut self) -> Self {
+		self.force_json = true;
+		self
+	}
+
+	/// Append a file to be included with the request.
+	/// Supported media types: application/pdf, text/plain, text/markdown, text/csv,
+	/// application/vnd.openxmlformats-officedocument.wordprocessingml.document (docx),
+	/// application/vnd.openxmlformats-officedocument.spreadsheetml.sheet (xlsx)
+	pub fn append_file(mut self, base64_data: String, media_type: String) -> Self {
+		self.files.push(FileAttachment { base64_data, media_type });
+		self
+	}
+
+	/// Append a file from a filesystem path.
+	pub fn append_file_from_path(self, path: impl AsRef<std::path::Path>) -> Result<Self> {
+		let path = path.as_ref();
+		let data = std::fs::read(path)?;
+		let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+		let media_type = mime_type_from_extension(path.extension().and_then(|s| s.to_str()).unwrap_or(""));
+		Ok(self.append_file(base64_data, media_type.to_string()))
+	}
+
 	pub async fn ask(&self, message: impl Into<String>) -> Result<Response> {
 		let mut conv = Conversation::new();
 		conv.add(Role::User, message.into());
 		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-		claude::ask_claude(&conv, self.model, self.temperature, self.max_tokens, stop_seqs).await
+		claude::ask_claude(&conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
+	}
+
+	pub async fn conversation(&self, conv: &Conversation) -> Result<Response> {
+		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+		claude::ask_claude(conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
 	}
 }
 
@@ -69,6 +121,15 @@ pub enum MessageContent {
 	Text(String),
 	Image { base64_data: String, media_type: String },
 	TextAndImages { text: String, images: Vec<ImageContent> },
+	Document { base64_data: String, media_type: String },
+	Mixed { parts: Vec<ContentPart> },
+}
+
+#[derive(Clone, Debug)]
+pub enum ContentPart {
+	Text(String),
+	Image { base64_data: String, media_type: String },
+	Document { base64_data: String, media_type: String },
 }
 
 #[derive(Clone, Debug)]

@@ -9,7 +9,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Conversation, Model, Response, Role, config};
+use crate::{Conversation, FileAttachment, Model, Response, Role, config};
 
 #[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq)]
@@ -88,17 +88,27 @@ enum ClaudeMessageContent {
 	ContentBlocks(Vec<ClaudeContentBlock>),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type")]
 enum ClaudeContentBlock {
 	#[serde(rename = "text")]
 	Text { text: String },
 	#[serde(rename = "image")]
 	Image { source: ImageSource },
+	#[serde(rename = "document")]
+	Document { source: DocumentSource },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 struct ImageSource {
+	#[serde(rename = "type")]
+	source_type: String,
+	media_type: String,
+	data: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DocumentSource {
 	#[serde(rename = "type")]
 	source_type: String,
 	media_type: String,
@@ -116,7 +126,7 @@ struct ClaudeConversation {
 }
 impl From<&Conversation> for ClaudeConversation {
 	fn from(conversation: &Conversation) -> Self {
-		use crate::MessageContent;
+		use crate::{ContentPart, MessageContent};
 		let mut messages = Vec::new();
 		for message in &conversation.0 {
 			let role = match message.role {
@@ -147,11 +157,73 @@ impl From<&Conversation> for ClaudeConversation {
 					}
 					ClaudeMessageContent::ContentBlocks(blocks)
 				}
+				MessageContent::Document { base64_data, media_type } => ClaudeMessageContent::ContentBlocks(vec![ClaudeContentBlock::Document {
+					source: DocumentSource {
+						source_type: "base64".to_string(),
+						media_type: media_type.clone(),
+						data: base64_data.clone(),
+					},
+				}]),
+				MessageContent::Mixed { parts } => {
+					let blocks = parts
+						.iter()
+						.map(|part| match part {
+							ContentPart::Text(text) => ClaudeContentBlock::Text { text: text.clone() },
+							ContentPart::Image { base64_data, media_type } => ClaudeContentBlock::Image {
+								source: ImageSource {
+									source_type: "base64".to_string(),
+									media_type: media_type.clone(),
+									data: base64_data.clone(),
+								},
+							},
+							ContentPart::Document { base64_data, media_type } => ClaudeContentBlock::Document {
+								source: DocumentSource {
+									source_type: "base64".to_string(),
+									media_type: media_type.clone(),
+									data: base64_data.clone(),
+								},
+							},
+						})
+						.collect();
+					ClaudeMessageContent::ContentBlocks(blocks)
+				}
 			};
 
 			messages.push(ClaudeMessage { role, content });
 		}
 		Self { messages }
+	}
+}
+
+/// Convert a file attachment to the appropriate content block.
+/// PDFs use the document block, text-based files are decoded and inserted as text.
+fn file_to_content_block(file: &FileAttachment) -> ClaudeContentBlock {
+	use base64::Engine;
+	match file.media_type.as_str() {
+		"application/pdf" => ClaudeContentBlock::Document {
+			source: DocumentSource {
+				source_type: "base64".to_string(),
+				media_type: file.media_type.clone(),
+				data: file.base64_data.clone(),
+			},
+		},
+		// Images use image blocks
+		mt if mt.starts_with("image/") => ClaudeContentBlock::Image {
+			source: ImageSource {
+				source_type: "base64".to_string(),
+				media_type: file.media_type.clone(),
+				data: file.base64_data.clone(),
+			},
+		},
+		// Text-based files are decoded and included as text
+		_ => {
+			let decoded = base64::engine::general_purpose::STANDARD
+				.decode(&file.base64_data)
+				.ok()
+				.and_then(|bytes| String::from_utf8(bytes).ok())
+				.unwrap_or_else(|| format!("[Binary file: {}]", file.media_type));
+			ClaudeContentBlock::Text { text: decoded }
+		}
 	}
 }
 
@@ -162,8 +234,29 @@ pub async fn ask_claude<T: AsRef<str>>(
 	temperature: Option<f32>,
 	requested_max_tokens: Option<usize>,
 	stop_sequences: Option<Vec<T>>,
+	force_json: bool,
+	files: &[FileAttachment],
 ) -> Result<Response> {
 	let mut conversation = ClaudeConversation::from(conversation);
+
+	// Prepend files to the first user message
+	if !files.is_empty() {
+		if let Some(first_user_msg) = conversation.messages.iter_mut().find(|m| m.role == "user") {
+			let mut file_blocks: Vec<ClaudeContentBlock> = files.iter().map(|f| file_to_content_block(f)).collect();
+
+			// Convert existing content to blocks and prepend file blocks
+			match &first_user_msg.content {
+				ClaudeMessageContent::Text(text) => {
+					file_blocks.push(ClaudeContentBlock::Text { text: text.clone() });
+					first_user_msg.content = ClaudeMessageContent::ContentBlocks(file_blocks);
+				}
+				ClaudeMessageContent::ContentBlocks(existing_blocks) => {
+					file_blocks.extend(existing_blocks.clone());
+					first_user_msg.content = ClaudeMessageContent::ContentBlocks(file_blocks);
+				}
+			}
+		}
+	}
 
 	let api_key = config::get()
 		.claude_token
@@ -175,7 +268,7 @@ pub async fn ask_claude<T: AsRef<str>>(
 	let mut headers = HeaderMap::new();
 	headers.insert("x-api-key", HeaderValue::from_str(&api_key).unwrap());
 	headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01")); // API standard edition, does not influence model versions
-	headers.insert("anthropic-beta", HeaderValue::from_static("output-128k-2025-02-19")); // allows for 128k tokens output on newer models
+	headers.insert("anthropic-beta", HeaderValue::from_static("output-128k-2025-02-19,structured-outputs-2025-11-13"));
 	headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 	//,}}}
 
@@ -209,9 +302,19 @@ pub async fn ask_claude<T: AsRef<str>>(
 	if let Some(system_message) = system_message {
 		payload.as_object_mut().unwrap().insert("system".to_string(), serde_json::json!(system_message));
 	}
+	if force_json {
+		// Use prefill approach - Claude's structured outputs require strict schemas with
+		// additionalProperties: false, which doesn't work for generic JSON responses.
+		// Prefill works universally across all models.
+		conversation.messages.push(ClaudeMessage {
+			role: "assistant",
+			content: ClaudeMessageContent::Text("{".to_string()),
+		});
+		payload.as_object_mut().unwrap().insert("messages".to_string(), serde_json::json!(conversation.messages));
+	}
 	//,}}}
 
-	Ok(match requested_max_tokens {
+	let mut response = match requested_max_tokens {
 		Some(max_tokens) if max_tokens <= 4096 => {
 			payload.as_object_mut().unwrap().insert("stream".to_owned(), serde_json::json!(false));
 			tracing::info!("getting through a rest get");
@@ -224,7 +327,14 @@ pub async fn ask_claude<T: AsRef<str>>(
 			tracing::debug!(?payload);
 			stream(request_builder.json(&payload), claude_model).await?
 		}
-	})
+	};
+
+	// Prepend the "{" we used for prefilling when force_json was enabled
+	if force_json {
+		response.text = format!("{{{}", response.text);
+	}
+
+	Ok(response)
 }
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]

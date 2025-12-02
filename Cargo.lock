@@ -101,6 +101,7 @@ checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
 name = "ask_llm"
 version = "2.0.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "clap",
  "color-eyre",

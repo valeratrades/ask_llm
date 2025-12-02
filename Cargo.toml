@@ -26,6 +26,7 @@ default = ["cli"]
 full = ["cli"]
 
 [dependencies]
+base64 = "0.22"
 bytes = "1.10.1"
 color-eyre = "^0.6.3"
 derive-new = "^0"
@@ -61,3 +62,11 @@ path = "examples/async.rs"
 [[example]]
 name = "codeblocks"
 path = "examples/codeblocks.rs"
+
+[[example]]
+name = "force_json"
+path = "examples/force_json.rs"
+
+[[example]]
+name = "file_attachment"
+path = "examples/file_attachment.rs"
