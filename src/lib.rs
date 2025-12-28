@@ -24,14 +24,21 @@ pub use shortcuts::*;
 /// Client for interacting with LLMs.
 ///
 /// Default settings produce a simple oneshot call with Model::Medium.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Client {
+	pub config: config::AppConfig,
 	pub model: Model,
 	pub temperature: Option<f32>,
 	pub max_tokens: Option<usize>,
 	pub stop_sequences: Option<Vec<String>>,
 	pub force_json: bool,
 	pub files: Vec<FileAttachment>,
+}
+
+impl Default for Client {
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 #[derive(Clone, Debug)]
@@ -41,8 +48,22 @@ pub struct FileAttachment {
 }
 
 impl Client {
+	/// Create a new client using default config (reads from environment).
 	pub fn new() -> Self {
-		Self::default()
+		Self::with_config(config::AppConfig::default())
+	}
+
+	/// Create a new client with explicit config.
+	pub fn with_config(config: config::AppConfig) -> Self {
+		Self {
+			config,
+			model: Model::default(),
+			temperature: None,
+			max_tokens: None,
+			stop_sequences: None,
+			force_json: false,
+			files: Vec::new(),
+		}
 	}
 
 	pub fn model(mut self, model: Model) -> Self {
@@ -92,12 +113,12 @@ impl Client {
 		let mut conv = Conversation::new();
 		conv.add(Role::User, message.into());
 		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-		claude::ask_claude(&conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
+		claude::ask_claude(&self.config, &conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
 	}
 
 	pub async fn conversation(&self, conv: &Conversation) -> Result<Response> {
 		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-		claude::ask_claude(conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
+		claude::ask_claude(&self.config, conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
 	}
 }
 

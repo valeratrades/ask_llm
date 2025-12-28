@@ -9,7 +9,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Conversation, FileAttachment, Model, Response, Role, config};
+use crate::{Conversation, FileAttachment, Model, Response, Role, config::AppConfig};
 
 #[allow(dead_code)]
 #[derive(Debug, Eq, PartialEq)]
@@ -229,6 +229,7 @@ fn file_to_content_block(file: &FileAttachment) -> ClaudeContentBlock {
 
 ///docs: https://docs.claude.com/claude/reference/messages_post
 pub async fn ask_claude<T: AsRef<str>>(
+	config: &AppConfig,
 	conversation: &Conversation,
 	model: Model,
 	temperature: Option<f32>,
@@ -258,8 +259,9 @@ pub async fn ask_claude<T: AsRef<str>>(
 		}
 	}
 
-	let api_key = config::get()
+	let api_key = config
 		.claude_token
+		.clone()
 		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
 		.expect("CLAUDE_TOKEN not set in config or environment");
 	let url = "https://api.anthropic.com/v1/messages";
