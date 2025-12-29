@@ -10,7 +10,7 @@
 Layer for llm requests, generic over models and providers
 
 ## Usage
-### Lib
+#### Lib
 Provides 2 simple primitives:
 
 `oneshot` and `conversation` functions, which follow standard logic for llm interactions, that most providers share.
@@ -23,7 +23,7 @@ ask_llm = { version = "*", default-features = false }
 ```
 as `clap` would be brought otherwise, as it is necessary for `cli` part to function.
 
-### Cli
+#### Cli
 Wraps the lib with clap. Uses `oneshot` by default, if needing `conversation` - read/write it from/to json files.
 
 ## Semver
@@ -49,3 +49,4 @@ Note that due to specifics of implementation, minor version bumps can change eff
 for inclusion in this crate by you, as defined in the Apache-2.0 license, shall
 be licensed as above, without any additional terms or conditions.
 </sub>
+
