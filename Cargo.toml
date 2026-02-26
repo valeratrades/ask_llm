@@ -1,7 +1,7 @@
 cargo-features = ["codegen-backend"]
 [package]
 name = "ask_llm"
-version = "2.1.5"
+version = "2.1.6"
 license = "MIT"
 description = "make a request to whatever llm is the best these days, without hardcoding model/provider"
 documentation = "https://github.com/valeratrades/ask_llm/tree/master/README.md"
