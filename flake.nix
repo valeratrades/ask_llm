@@ -4,7 +4,7 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
     pre-commit-hooks.url = "github:cachix/git-hooks.nix/ca5b894d3e3e151ffc1db040b6ce4dcc75d31c37";
-    v-utils.url = "github:valeratrades/.github/v1.2.1";
+    v-utils.url = "github:valeratrades/.github/v1.4";
   };
   outputs = { nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils, ... }:
     flake-utils.lib.eachDefaultSystem (system:
@@ -25,17 +25,20 @@
           inherit pkgs pname;
           langs = [ "rs" ];
           lastSupportedVersion = "nightly-2025-03-13";
-          jobsErrors = [ "rust-tests" "rust-miri" ];
-          jobsWarnings = [ "rust-doc" "rust-clippy" "rust-machete" "rust-sorted" "tokei" ];
-          jobsOther = [ "loc-badge" ];
+          jobs.default = true;
+          jobs.errors.augment = [ "rust-miri" ];
+        };
+        rs = v-utils.rs {
+          inherit pkgs rust;
         };
         readme = v-utils.readme-fw {
           inherit pkgs pname;
           lastSupportedVersion = "nightly-1.86";
           rootDir = ./.;
-          licenses = [{ name = "Blue Oak 1.0.0"; outPath = "LICENSE"; }];
+          defaults = true;
           badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
         };
+        combined = v-utils.utils.combine [ github readme rs ];
       in
       {
         packages =
@@ -64,20 +67,7 @@
         devShells.default = with pkgs; mkShell {
           inherit stdenv;
           shellHook =
-            pre-commit-check.shellHook +
-            github.shellHook +
-            ''
-              							cp -f ${v-utils.files.licenses.blue_oak} ./LICENSE
-
-              							cp -f ${(v-utils.files.treefmt) {inherit pkgs;}} ./.treefmt.toml
-
-              							mkdir -p ./.cargo
-              							cp -f ${(v-utils.files.rust.rustfmt {inherit pkgs;})} ./rustfmt.toml
-              							cp -f ${(v-utils.files.rust.config {inherit pkgs;})} ./.cargo/config.toml
-
-              							cp -f ${readme} ./README.md
-            '';
-
+            pre-commit-check.shellHook + combined.shellHook;
           env = {
             RUST_BACKTRACE = 1;
             RUST_LIB_BACKTRACE = 0;
@@ -88,7 +78,7 @@
             openssl
             pkg-config
             rust
-          ] ++ pre-commit-check.enabledPackages ++ github.enabledPackages;
+          ] ++ pre-commit-check.enabledPackages ++ combined.enabledPackages;
         };
       }
     );
