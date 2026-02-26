@@ -42,6 +42,7 @@ v_utils = { version = "^2.15.9", features = ["cli"] }
 
 # Optional {{{
 clap = { version = "^4.5.53", features = ["derive"], optional = true }
+miette = { version = "7.6.0", features = ["fancy", "syntect-highlighter", "serde"] }
 
 [lints.clippy]
 # Stable
