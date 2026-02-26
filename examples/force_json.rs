@@ -16,7 +16,7 @@ async fn main() {
 
 	// Verify it's valid JSON
 	let parsed: serde_json::Value = serde_json::from_str(&response.text).expect("Response should be valid JSON");
-	println!("Parsed: {:#?}", parsed);
+	println!("Parsed: {parsed:#?}");
 }
 
 #[cfg(test)]

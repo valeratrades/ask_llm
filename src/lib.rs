@@ -2,25 +2,6 @@ use eyre::{Result, bail};
 
 mod claude;
 
-fn mime_type_from_extension(ext: &str) -> &'static str {
-	match ext.to_lowercase().as_str() {
-		"pdf" => "application/pdf",
-		"txt" => "text/plain",
-		"md" => "text/markdown",
-		"csv" => "text/csv",
-		"docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-		"xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-		"png" => "image/png",
-		"jpg" | "jpeg" => "image/jpeg",
-		"gif" => "image/gif",
-		"webp" => "image/webp",
-		_ => "application/octet-stream",
-	}
-}
-pub mod config;
-mod shortcuts;
-pub use shortcuts::*;
-
 /// Client for interacting with LLMs.
 ///
 /// Default settings produce a simple oneshot call with Model::Medium.
@@ -34,19 +15,6 @@ pub struct Client {
 	pub force_json: bool,
 	pub files: Vec<FileAttachment>,
 }
-
-impl Default for Client {
-	fn default() -> Self {
-		Self::new()
-	}
-}
-
-#[derive(Clone, Debug)]
-pub struct FileAttachment {
-	pub base64_data: String,
-	pub media_type: String,
-}
-
 impl Client {
 	/// Create a new client using default config (reads from environment).
 	pub fn new() -> Self {
@@ -122,6 +90,11 @@ impl Client {
 	}
 }
 
+#[derive(Clone, Debug)]
+pub struct FileAttachment {
+	pub base64_data: String,
+	pub media_type: String,
+}
 #[derive(Clone, Copy, Debug, Default, derive_more::FromStr)]
 pub enum Model {
 	Fast,
@@ -129,14 +102,12 @@ pub enum Model {
 	Medium,
 	Slow,
 }
-
 #[derive(Clone, Copy, Debug)]
 pub enum Role {
 	System,
 	User,
 	Assistant,
 }
-
 #[derive(Clone, Debug)]
 pub enum MessageContent {
 	Text(String),
@@ -145,26 +116,22 @@ pub enum MessageContent {
 	Document { base64_data: String, media_type: String },
 	Mixed { parts: Vec<ContentPart> },
 }
-
 #[derive(Clone, Debug)]
 pub enum ContentPart {
 	Text(String),
 	Image { base64_data: String, media_type: String },
 	Document { base64_data: String, media_type: String },
 }
-
 #[derive(Clone, Debug)]
 pub struct ImageContent {
 	pub base64_data: String,
 	pub media_type: String,
 }
-
 #[derive(Clone, Debug)]
 pub struct Message {
 	pub(crate) role: Role,
 	pub(crate) content: MessageContent,
 }
-
 impl Message {
 	fn new(role: Role, content: impl Into<String>) -> Self {
 		Self {
@@ -190,7 +157,6 @@ impl Message {
 
 #[derive(Clone, Debug, Default)]
 pub struct Conversation(pub Vec<Message>);
-
 impl Conversation {
 	pub fn new() -> Self {
 		Self(Vec::new())
@@ -215,13 +181,6 @@ pub struct Response {
 	pub text: String,
 	pub cost_cents: f32,
 }
-
-impl std::fmt::Display for Response {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "Response: {}\nCost (cents): {}", self.text, self.cost_cents)
-	}
-}
-
 impl Response {
 	/// Extract codeblocks with optional extension filtering.
 	/// If extensions is None or empty, all codeblocks are returned.
@@ -274,10 +233,41 @@ impl Response {
 	}
 
 	pub fn extract_html_tag(&self, tag_name: &str) -> Result<String> {
-		let opening_tag = format!("<{}>", tag_name);
-		let closing_tag = format!("</{}>", tag_name);
+		let opening_tag = format!("<{tag_name}>");
+		let closing_tag = format!("</{tag_name}>");
 		let from_start = self.text.split_once(&opening_tag).unwrap().1;
 		let extracted = from_start.split_once(&closing_tag).unwrap().0;
 		Ok(extracted.to_string())
+	}
+}
+
+fn mime_type_from_extension(ext: &str) -> &'static str {
+	match ext.to_lowercase().as_str() {
+		"pdf" => "application/pdf",
+		"txt" => "text/plain",
+		"md" => "text/markdown",
+		"csv" => "text/csv",
+		"docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+		"xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+		"png" => "image/png",
+		"jpg" | "jpeg" => "image/jpeg",
+		"gif" => "image/gif",
+		"webp" => "image/webp",
+		_ => "application/octet-stream",
+	}
+}
+pub mod config;
+mod shortcuts;
+pub use shortcuts::*;
+
+impl Default for Client {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+impl std::fmt::Display for Response {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "Response: {}\nCost (cents): {}", self.text, self.cost_cents)
 	}
 }

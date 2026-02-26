@@ -4,19 +4,6 @@ use ask_llm::{
 };
 use clap::Parser;
 
-#[derive(Debug, Parser)]
-#[command(author, version, about, long_about = None)]
-struct Cli {
-	question: String,
-	#[clap(short, long, default_value = "medium")]
-	model: Model,
-	/// If true, will avoid streaming (caps response at 4096 tokens)
-	#[clap(short, long)]
-	fast: bool,
-	#[command(flatten)]
-	settings: SettingsFlags,
-}
-
 #[tokio::main]
 async fn main() {
 	v_utils::clientside!();
@@ -31,4 +18,16 @@ async fn main() {
 	let answer = client.ask(cli.question).await.unwrap().text;
 
 	println!("{answer:#}");
+}
+#[derive(Debug, Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+	question: String,
+	#[clap(short, long, default_value = "medium")]
+	model: Model,
+	/// If true, will avoid streaming (caps response at 4096 tokens)
+	#[clap(short, long)]
+	fast: bool,
+	#[command(flatten)]
+	settings: SettingsFlags,
 }

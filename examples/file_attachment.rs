@@ -16,7 +16,7 @@ async fn main() {
 		.ask("How many lines are in the attached document?")
 		.await
 		.unwrap();
-	println!("Inline attachment response:\n{:#?}\n", response);
+	println!("Inline attachment response:\n{response:#?}\n");
 
 	// Example 2: Attach file from path
 	// Uncomment and modify path to test with a local file:
