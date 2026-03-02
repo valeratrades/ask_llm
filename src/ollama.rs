@@ -74,7 +74,11 @@ impl Ollama {
 		let text = parsed.choices.into_iter().next().map(|c| c.message.content).unwrap_or_default();
 
 		// Ollama/local models have zero API cost
-		Ok(Response::new(text, 0.0))
+		Ok(Response {
+			text,
+			cost_cents: 0.0,
+			duration: std::time::Duration::ZERO,
+		})
 	}
 }
 

@@ -91,7 +91,10 @@ impl Client {
 			force_json: self.force_json,
 			files: &self.files,
 		};
-		self.backend.conversation(&request).await
+		let start = std::time::Instant::now();
+		let mut response = self.backend.conversation(&request).await?;
+		response.duration = start.elapsed();
+		Ok(response)
 	}
 }
 
@@ -213,10 +216,11 @@ impl Conversation {
 	}
 }
 
-#[derive(Debug, derive_new::new)]
+#[derive(Debug)]
 pub struct Response {
 	pub text: String,
 	pub cost_cents: f32,
+	pub duration: std::time::Duration,
 }
 impl Response {
 	/// Extract codeblocks with optional extension filtering.
@@ -330,6 +334,9 @@ impl Default for Client {
 
 impl std::fmt::Display for Response {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "Response: {}\nCost (cents): {}", self.text, self.cost_cents)
+		let secs = self.duration.as_secs_f32();
+		let chars = self.text.len();
+		let ms_per_char = if chars > 0 { secs * 1000.0 / chars as f32 } else { 0.0 };
+		write!(f, "Response: {}\nCost: {:.4}¢ | Time: {:.1}s | {:.1}ms/char", self.text, self.cost_cents, secs, ms_per_char)
 	}
 }

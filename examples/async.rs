@@ -9,7 +9,13 @@ async fn main() {
 	println!("{oneshot_response:#?}");
 
 	// With options
-	let response = Client::new().model(Model::Fast).max_tokens(10).stop_sequences(vec![";"]).ask("What day is today?").await.unwrap();
+	let response = Client::default()
+		.model(Model::Fast)
+		.max_tokens(10)
+		.stop_sequences(vec![";"])
+		.ask("What day is today?")
+		.await
+		.unwrap();
 	println!("{response:#?}");
 }
 

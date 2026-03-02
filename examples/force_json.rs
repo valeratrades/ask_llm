@@ -4,7 +4,7 @@ use ask_llm::{Client, Model};
 async fn main() {
 	v_utils::clientside!();
 
-	let response = Client::new()
+	let response = Client::default()
 		.model(Model::Fast)
 		.max_tokens(100)
 		.force_json()
@@ -25,7 +25,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn test_force_json() {
-		let response = Client::new()
+		let response = Client::default()
 			.model(Model::Fast)
 			.max_tokens(100)
 			.force_json()

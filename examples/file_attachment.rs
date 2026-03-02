@@ -9,7 +9,7 @@ async fn main() {
 	let test_content = "Hello, this is a test document.\nIt has multiple lines.\nLine 3 here.";
 	let base64_data = base64::engine::general_purpose::STANDARD.encode(test_content.as_bytes());
 
-	let response = Client::new()
+	let response = Client::default()
 		.model(Model::Fast)
 		.max_tokens(100)
 		.append_file(base64_data, "text/plain".to_string())
@@ -20,7 +20,7 @@ async fn main() {
 
 	// Example 2: Attach file from path
 	// Uncomment and modify path to test with a local file:
-	// let response = Client::new()
+	// let response = Client::default()
 	//     .model(Model::Fast)
 	//     .max_tokens(100)
 	//     .append_file_from_path("/path/to/file.txt")

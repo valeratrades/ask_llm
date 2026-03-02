@@ -383,7 +383,11 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 
 	let estimated_tokens = accumulated_message.split_whitespace().count() as f32 * 0.7;
 	let cost = (model.cost().million_output_tokens * estimated_tokens) / 1_000_000.0;
-	Ok(Response::new(accumulated_message, cost))
+	Ok(Response {
+		text: accumulated_message,
+		cost_cents: cost,
+		duration: std::time::Duration::ZERO,
+	})
 }
 //,}}}
 
@@ -436,6 +440,7 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 			Self {
 				text: response.text(),
 				cost_cents: response.cost_cents(),
+				duration: std::time::Duration::ZERO,
 			}
 		}
 	}

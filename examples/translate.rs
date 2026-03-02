@@ -15,7 +15,7 @@ workers for the new landscape of employment.";
 async fn main() {
 	v_utils::clientside!();
 
-	let response = Client::new()
+	let response = Client::default()
 		.model(Model::Fast)
 		.ask(format!(
 			"Translate the following English text to German. Output ONLY the translation, nothing else.\n\n{PARAGRAPHS}"
@@ -23,7 +23,11 @@ async fn main() {
 		.await
 		.unwrap();
 
+	let secs = response.duration.as_secs_f32();
+	let chars = response.text.len();
+	let ms_per_char = if chars > 0 { secs * 1000.0 / chars as f32 } else { 0.0 };
+
 	println!("=== Original ===\n{PARAGRAPHS}\n");
 	println!("=== German Translation (Qwen 3.5 9B, local) ===\n{}", response.text);
-	println!("\n[cost: {:.4}¢]", response.cost_cents);
+	println!("\n[cost: {:.4}¢ | time: {:.1}s | {:.1}ms/char]", response.cost_cents, secs, ms_per_char);
 }
