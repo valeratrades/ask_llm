@@ -7,13 +7,6 @@ pub(crate) struct Ollama {
 	pub model: String,
 	pub url: String,
 }
-
-impl Backend for Ollama {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
-		Box::pin(self.do_conversation(request))
-	}
-}
-
 impl Ollama {
 	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
 		if !request.files.is_empty() {
@@ -85,6 +78,12 @@ impl Ollama {
 	}
 }
 
+impl Backend for Ollama {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
+		Box::pin(self.do_conversation(request))
+	}
+}
+
 #[derive(Debug, Serialize)]
 struct OllamaRequest {
 	model: String,
@@ -97,7 +96,7 @@ struct OllamaRequest {
 	stream: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct OllamaMessage {
 	role: String,
 	content: String,

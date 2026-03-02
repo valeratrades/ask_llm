@@ -8,22 +8,14 @@ use serde_json::{Value, json};
 
 use crate::{Backend, Conversation, FileAttachment, Request, Response, Role};
 
-pub(crate) struct Claude {
-	pub api_key: String,
-	pub model: ClaudeModel,
-}
-
-impl Backend for Claude {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
-		Box::pin(self.do_conversation(request))
-	}
-}
-
 pub struct Cost {
 	pub million_input_tokens: f32,
 	pub million_output_tokens: f32,
 }
-
+pub(crate) struct Claude {
+	pub api_key: String,
+	pub model: ClaudeModel,
+}
 impl Claude {
 	///docs: https://docs.claude.com/claude/reference/messages_post
 	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
@@ -119,6 +111,12 @@ impl Claude {
 		}
 
 		Ok(response)
+	}
+}
+
+impl Backend for Claude {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
+		Box::pin(self.do_conversation(request))
 	}
 }
 

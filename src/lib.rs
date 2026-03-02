@@ -5,19 +5,6 @@ use eyre::{Result, bail};
 mod claude;
 mod ollama;
 
-pub(crate) trait Backend: Send + Sync {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
-}
-
-pub(crate) struct Request<'a> {
-	pub conversation: &'a Conversation,
-	pub temperature: Option<f32>,
-	pub max_tokens: Option<usize>,
-	pub stop_sequences: Option<Vec<&'a str>>,
-	pub force_json: bool,
-	pub files: &'a [FileAttachment],
-}
-
 /// Client for interacting with LLMs.
 ///
 /// Default settings produce a simple oneshot call with Model::Medium.
@@ -29,17 +16,6 @@ pub struct Client {
 	stop_sequences: Option<Vec<String>>,
 	force_json: bool,
 	files: Vec<FileAttachment>,
-}
-impl std::fmt::Debug for Client {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		f.debug_struct("Client")
-			.field("temperature", &self.temperature)
-			.field("max_tokens", &self.max_tokens)
-			.field("stop_sequences", &self.stop_sequences)
-			.field("force_json", &self.force_json)
-			.field("files", &self.files)
-			.finish_non_exhaustive()
-	}
 }
 impl Client {
 	/// Create a new client using default config (reads from environment).
@@ -121,37 +97,6 @@ impl Client {
 			files: &self.files,
 		};
 		self.backend.conversation(&request).await
-	}
-}
-
-fn backend_for_model(model: Model, config: &config::AppConfig) -> Box<dyn Backend> {
-	match model {
-		Model::Fast => Box::new(ollama::Ollama {
-			model: "qwen3.5:9b".to_string(),
-			url: "http://localhost:11434/v1/chat/completions".to_string(),
-		}),
-		Model::Medium => {
-			let api_key = config
-				.claude_token
-				.clone()
-				.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-				.expect("CLAUDE_TOKEN not set in config or environment");
-			Box::new(claude::Claude {
-				api_key,
-				model: claude::ClaudeModel::Sonnet45,
-			})
-		}
-		Model::Slow => {
-			let api_key = config
-				.claude_token
-				.clone()
-				.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-				.expect("CLAUDE_TOKEN not set in config or environment");
-			Box::new(claude::Claude {
-				api_key,
-				model: claude::ClaudeModel::Opus41,
-			})
-		}
 	}
 }
 
@@ -303,6 +248,62 @@ impl Response {
 		let from_start = self.text.split_once(&opening_tag).unwrap().1;
 		let extracted = from_start.split_once(&closing_tag).unwrap().0;
 		Ok(extracted.to_string())
+	}
+}
+
+pub(crate) trait Backend: Send + Sync {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
+}
+
+pub(crate) struct Request<'a> {
+	pub conversation: &'a Conversation,
+	pub temperature: Option<f32>,
+	pub max_tokens: Option<usize>,
+	pub stop_sequences: Option<Vec<&'a str>>,
+	pub force_json: bool,
+	pub files: &'a [FileAttachment],
+}
+
+impl std::fmt::Debug for Client {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Client")
+			.field("temperature", &self.temperature)
+			.field("max_tokens", &self.max_tokens)
+			.field("stop_sequences", &self.stop_sequences)
+			.field("force_json", &self.force_json)
+			.field("files", &self.files)
+			.finish_non_exhaustive()
+	}
+}
+
+fn backend_for_model(model: Model, config: &config::AppConfig) -> Box<dyn Backend> {
+	match model {
+		Model::Fast => Box::new(ollama::Ollama {
+			model: "qwen3.5:9b".to_string(),
+			url: "http://localhost:11434/v1/chat/completions".to_string(),
+		}),
+		Model::Medium => {
+			let api_key = config
+				.claude_token
+				.clone()
+				.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+				.expect("CLAUDE_TOKEN not set in config or environment");
+			Box::new(claude::Claude {
+				api_key,
+				model: claude::ClaudeModel::Sonnet45,
+			})
+		}
+		Model::Slow => {
+			let api_key = config
+				.claude_token
+				.clone()
+				.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+				.expect("CLAUDE_TOKEN not set in config or environment");
+			Box::new(claude::Claude {
+				api_key,
+				model: claude::ClaudeModel::Opus41,
+			})
+		}
 	}
 }
 
