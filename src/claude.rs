@@ -6,7 +6,7 @@ use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Backend, Conversation, FileAttachment, Request, Response, Role};
+use crate::{Backend, Conversation, FileAttachment, Request, Response, Role, ThinkingLevel};
 
 pub struct Cost {
 	pub million_input_tokens: f32,
@@ -66,12 +66,29 @@ impl Claude {
 		};
 
 		// Payload {{{
+		let thinking_budget = match request.thinking {
+			ThinkingLevel::None => None,
+			ThinkingLevel::Low => Some(2_048),
+			ThinkingLevel::Medium => Some(8_192),
+			ThinkingLevel::High => Some(32_000),
+		};
+		// Claude requires temperature=1 when extended thinking is enabled
+		let temperature = match thinking_budget {
+			Some(_) => 1.0,
+			None => request.temperature.unwrap_or(0.0),
+		};
 		let mut payload = json!({
 			"model": self.model.to_str(),
-			"temperature": request.temperature.unwrap_or(0.0),
+			"temperature": temperature,
 			"max_tokens": max_tokens,
 			"messages": conversation.messages
 		});
+		if let Some(budget) = thinking_budget {
+			payload
+				.as_object_mut()
+				.unwrap()
+				.insert("thinking".to_string(), json!({"type": "enabled", "budget_tokens": budget}));
+		}
 		if let Some(ref stop_seqs) = request.stop_sequences {
 			payload.as_object_mut().unwrap().insert("stop_sequences".to_string(), serde_json::json!(stop_seqs));
 		}
@@ -110,6 +127,8 @@ impl Claude {
 			response.text = format!("{{{}", response.text);
 		}
 
+		response.model = self.model.to_str().to_string();
+		response.thinking = request.thinking;
 		Ok(response)
 	}
 }
@@ -387,6 +406,8 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 		text: accumulated_message,
 		cost_cents: cost,
 		duration: std::time::Duration::ZERO,
+		model: String::new(),
+		thinking: ThinkingLevel::None,
 	})
 }
 //,}}}
@@ -441,6 +462,8 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 				text: response.text(),
 				cost_cents: response.cost_cents(),
 				duration: std::time::Duration::ZERO,
+				model: String::new(),
+				thinking: ThinkingLevel::None,
 			}
 		}
 	}

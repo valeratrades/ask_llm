@@ -16,6 +16,7 @@ pub struct Client {
 	stop_sequences: Option<Vec<String>>,
 	force_json: bool,
 	files: Vec<FileAttachment>,
+	thinking: ThinkingLevel,
 }
 impl Client {
 	/// Create a new client using default config (reads from environment).
@@ -29,6 +30,7 @@ impl Client {
 			stop_sequences: None,
 			force_json: false,
 			files: Vec::new(),
+			thinking: ThinkingLevel::default(),
 		}
 	}
 
@@ -54,6 +56,11 @@ impl Client {
 
 	pub fn force_json(mut self) -> Self {
 		self.force_json = true;
+		self
+	}
+
+	pub fn thinking(mut self, level: ThinkingLevel) -> Self {
+		self.thinking = level;
 		self
 	}
 
@@ -90,6 +97,7 @@ impl Client {
 			stop_sequences: stop_seqs,
 			force_json: self.force_json,
 			files: &self.files,
+			thinking: self.thinking,
 		};
 		let start = std::time::Instant::now();
 		let mut response = self.backend.conversation(&request).await?;
@@ -115,7 +123,7 @@ impl Model {
 		match self {
 			Model::Fast => Box::new(ollama::Ollama {
 				model: "qwen3.5:9b".to_string(),
-				url: "http://localhost:11434/v1/chat/completions".to_string(),
+				url: "http://localhost:11434/api/chat".to_string(),
 			}),
 			Model::Medium => {
 				let api_key = config
@@ -141,6 +149,14 @@ impl Model {
 			}
 		}
 	}
+}
+#[derive(Clone, Copy, Debug, Default)]
+pub enum ThinkingLevel {
+	#[default]
+	None,
+	Low,
+	Medium,
+	High,
 }
 #[derive(Clone, Copy, Debug)]
 pub enum Role {
@@ -221,6 +237,8 @@ pub struct Response {
 	pub text: String,
 	pub cost_cents: f32,
 	pub duration: std::time::Duration,
+	pub model: String,
+	pub thinking: ThinkingLevel,
 }
 impl Response {
 	/// Extract codeblocks with optional extension filtering.
@@ -293,6 +311,7 @@ pub(crate) struct Request<'a> {
 	pub stop_sequences: Option<Vec<&'a str>>,
 	pub force_json: bool,
 	pub files: &'a [FileAttachment],
+	pub thinking: ThinkingLevel,
 }
 
 impl std::fmt::Debug for Client {
@@ -302,6 +321,7 @@ impl std::fmt::Debug for Client {
 			.field("max_tokens", &self.max_tokens)
 			.field("stop_sequences", &self.stop_sequences)
 			.field("force_json", &self.force_json)
+			.field("thinking", &self.thinking)
 			.field("files", &self.files)
 			.finish_non_exhaustive()
 	}
@@ -332,11 +352,26 @@ impl Default for Client {
 	}
 }
 
+impl std::fmt::Display for ThinkingLevel {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::None => write!(f, "none"),
+			Self::Low => write!(f, "low"),
+			Self::Medium => write!(f, "medium"),
+			Self::High => write!(f, "high"),
+		}
+	}
+}
+
 impl std::fmt::Display for Response {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		let secs = self.duration.as_secs_f32();
 		let chars = self.text.len();
 		let ms_per_char = if chars > 0 { secs * 1000.0 / chars as f32 } else { 0.0 };
-		write!(f, "Response: {}\nCost: {:.4}¢ | Time: {:.1}s | {:.1}ms/char", self.text, self.cost_cents, secs, ms_per_char)
+		write!(
+			f,
+			"[model: {} | thinking: {} | cost: {:.4}¢ | time: {secs:.1}s | {ms_per_char:.1}ms/char]",
+			self.model, self.thinking, self.cost_cents
+		)
 	}
 }

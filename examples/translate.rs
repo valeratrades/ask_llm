@@ -23,11 +23,7 @@ async fn main() {
 		.await
 		.unwrap();
 
-	let secs = response.duration.as_secs_f32();
-	let chars = response.text.len();
-	let ms_per_char = if chars > 0 { secs * 1000.0 / chars as f32 } else { 0.0 };
-
 	println!("=== Original ===\n{PARAGRAPHS}\n");
-	println!("=== German Translation (Qwen 3.5 9B, local) ===\n{}", response.text);
-	println!("\n[cost: {:.4}¢ | time: {:.1}s | {:.1}ms/char]", response.cost_cents, secs, ms_per_char);
+	println!("=== German Translation ===\n{}", response.text);
+	println!("\n{response}");
 }

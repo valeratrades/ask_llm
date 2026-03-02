@@ -1,7 +1,7 @@
 use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::{Backend, Request, Response, Role};
+use crate::{Backend, Request, Response, Role, ThinkingLevel};
 
 pub(crate) struct Ollama {
 	pub model: String,
@@ -32,7 +32,6 @@ impl Ollama {
 		}
 
 		if request.force_json {
-			// Append instruction to return JSON
 			if let Some(last) = messages.last_mut() {
 				if last.role == "user" {
 					last.content.push_str("\n\nRespond with valid JSON only, no other text.");
@@ -40,17 +39,22 @@ impl Ollama {
 			}
 		}
 
+		let think = !matches!(request.thinking, ThinkingLevel::None);
+
 		let mut ollama_request = OllamaRequest {
 			model: self.model.clone(),
 			messages,
-			temperature: request.temperature.unwrap_or(0.0),
-			max_tokens: request.max_tokens,
-			stop: None,
 			stream: false,
+			think,
+			options: OllamaOptions {
+				temperature: request.temperature.unwrap_or(0.0),
+				num_predict: request.max_tokens,
+				stop: None,
+			},
 		};
 
 		if let Some(ref seqs) = request.stop_sequences {
-			ollama_request.stop = Some(seqs.iter().map(|s| s.to_string()).collect());
+			ollama_request.options.stop = Some(seqs.iter().map(|s| s.to_string()).collect());
 		}
 
 		let response = reqwest::Client::new().post(&self.url).json(&ollama_request).send().await?;
@@ -71,13 +75,12 @@ impl Ollama {
 			);
 		})?;
 
-		let text = parsed.choices.into_iter().next().map(|c| c.message.content).unwrap_or_default();
-
-		// Ollama/local models have zero API cost
 		Ok(Response {
-			text,
+			text: parsed.message.content,
 			cost_cents: 0.0,
 			duration: std::time::Duration::ZERO,
+			model: self.model.clone(),
+			thinking: request.thinking,
 		})
 	}
 }
@@ -92,12 +95,18 @@ impl Backend for Ollama {
 struct OllamaRequest {
 	model: String,
 	messages: Vec<OllamaMessage>,
+	stream: bool,
+	think: bool,
+	options: OllamaOptions,
+}
+
+#[derive(Debug, Serialize)]
+struct OllamaOptions {
 	temperature: f32,
 	#[serde(skip_serializing_if = "Option::is_none")]
-	max_tokens: Option<usize>,
+	num_predict: Option<usize>,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	stop: Option<Vec<String>>,
-	stream: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -108,10 +117,5 @@ struct OllamaMessage {
 
 #[derive(Debug, Deserialize)]
 struct OllamaResponse {
-	choices: Vec<OllamaChoice>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaChoice {
 	message: OllamaMessage,
 }
