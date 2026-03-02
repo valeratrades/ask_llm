@@ -19,13 +19,8 @@ pub struct Client {
 }
 impl Client {
 	/// Create a new client using default config (reads from environment).
-	pub fn new() -> Self {
-		Self::with_config(config::AppConfig::default())
-	}
-
-	/// Create a new client with explicit config.
-	pub fn with_config(config: config::AppConfig) -> Self {
-		let backend = backend_for_model(Model::default(), &config);
+	pub fn new(config: config::AppConfig) -> Self {
+		let backend = Model::default().into_backend(&config);
 		Self {
 			config,
 			backend,
@@ -38,7 +33,7 @@ impl Client {
 	}
 
 	pub fn model(mut self, model: Model) -> Self {
-		self.backend = backend_for_model(model, &self.config);
+		self.backend = model.into_backend(&self.config);
 		self
 	}
 
@@ -111,6 +106,38 @@ pub enum Model {
 	#[default]
 	Medium,
 	Slow,
+}
+impl Model {
+	fn into_backend(self, config: &config::AppConfig) -> Box<dyn Backend> {
+		match self {
+			Model::Fast => Box::new(ollama::Ollama {
+				model: "qwen3.5:9b".to_string(),
+				url: "http://localhost:11434/v1/chat/completions".to_string(),
+			}),
+			Model::Medium => {
+				let api_key = config
+					.claude_token
+					.clone()
+					.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+					.expect("CLAUDE_TOKEN not set in config or environment");
+				Box::new(claude::Claude {
+					api_key,
+					model: claude::ClaudeModel::Sonnet45,
+				})
+			}
+			Model::Slow => {
+				let api_key = config
+					.claude_token
+					.clone()
+					.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+					.expect("CLAUDE_TOKEN not set in config or environment");
+				Box::new(claude::Claude {
+					api_key,
+					model: claude::ClaudeModel::Opus41,
+				})
+			}
+		}
+	}
 }
 #[derive(Clone, Copy, Debug)]
 pub enum Role {
@@ -276,37 +303,6 @@ impl std::fmt::Debug for Client {
 	}
 }
 
-fn backend_for_model(model: Model, config: &config::AppConfig) -> Box<dyn Backend> {
-	match model {
-		Model::Fast => Box::new(ollama::Ollama {
-			model: "qwen3.5:9b".to_string(),
-			url: "http://localhost:11434/v1/chat/completions".to_string(),
-		}),
-		Model::Medium => {
-			let api_key = config
-				.claude_token
-				.clone()
-				.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-				.expect("CLAUDE_TOKEN not set in config or environment");
-			Box::new(claude::Claude {
-				api_key,
-				model: claude::ClaudeModel::Sonnet45,
-			})
-		}
-		Model::Slow => {
-			let api_key = config
-				.claude_token
-				.clone()
-				.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-				.expect("CLAUDE_TOKEN not set in config or environment");
-			Box::new(claude::Claude {
-				api_key,
-				model: claude::ClaudeModel::Opus41,
-			})
-		}
-	}
-}
-
 fn mime_type_from_extension(ext: &str) -> &'static str {
 	match ext.to_lowercase().as_str() {
 		"pdf" => "application/pdf",
@@ -328,7 +324,7 @@ pub use shortcuts::*;
 
 impl Default for Client {
 	fn default() -> Self {
-		Self::new()
+		Self::new(config::AppConfig::default())
 	}
 }
 
