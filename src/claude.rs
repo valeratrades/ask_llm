@@ -185,7 +185,7 @@ impl std::str::FromStr for ClaudeModel {
 impl From<Model> for ClaudeModel {
 	fn from(model: Model) -> Self {
 		match model {
-			Model::Fast => Self::Haiku45,
+			Model::Fast => unreachable!("Model::Fast is handled by the Ollama backend"),
 			Model::Medium => Self::Sonnet45,
 			Model::Slow => Self::Opus41,
 		}

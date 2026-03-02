@@ -1,6 +1,7 @@
 use eyre::{Result, bail};
 
 mod claude;
+mod ollama;
 
 /// Client for interacting with LLMs.
 ///
@@ -80,13 +81,20 @@ impl Client {
 	pub async fn ask(&self, message: impl Into<String>) -> Result<Response> {
 		let mut conv = Conversation::new();
 		conv.add(Role::User, message.into());
-		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-		claude::ask_claude(&self.config, &conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
+		self.conversation(&conv).await
 	}
 
 	pub async fn conversation(&self, conv: &Conversation) -> Result<Response> {
-		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-		claude::ask_claude(&self.config, conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
+		match self.model {
+			Model::Fast => {
+				let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+				ollama::ask_ollama(conv, self.temperature, self.max_tokens, stop_seqs, self.force_json).await
+			}
+			_ => {
+				let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+				claude::ask_claude(&self.config, conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
+			}
+		}
 	}
 }
 

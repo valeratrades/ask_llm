@@ -71,3 +71,7 @@ path = "examples/force_json.rs"
 [[example]]
 name = "file_attachment"
 path = "examples/file_attachment.rs"
+
+[[example]]
+name = "translate"
+path = "examples/translate.rs"
