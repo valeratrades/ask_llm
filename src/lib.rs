@@ -1,20 +1,45 @@
+use std::{future::Future, pin::Pin};
+
 use eyre::{Result, bail};
 
 mod claude;
 mod ollama;
 
+pub(crate) trait Backend: Send + Sync {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
+}
+
+pub(crate) struct Request<'a> {
+	pub conversation: &'a Conversation,
+	pub temperature: Option<f32>,
+	pub max_tokens: Option<usize>,
+	pub stop_sequences: Option<Vec<&'a str>>,
+	pub force_json: bool,
+	pub files: &'a [FileAttachment],
+}
+
 /// Client for interacting with LLMs.
 ///
 /// Default settings produce a simple oneshot call with Model::Medium.
-#[derive(Clone, Debug)]
 pub struct Client {
-	pub config: config::AppConfig,
-	pub model: Model,
-	pub temperature: Option<f32>,
-	pub max_tokens: Option<usize>,
-	pub stop_sequences: Option<Vec<String>>,
-	pub force_json: bool,
-	pub files: Vec<FileAttachment>,
+	config: config::AppConfig,
+	backend: Box<dyn Backend>,
+	temperature: Option<f32>,
+	max_tokens: Option<usize>,
+	stop_sequences: Option<Vec<String>>,
+	force_json: bool,
+	files: Vec<FileAttachment>,
+}
+impl std::fmt::Debug for Client {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Client")
+			.field("temperature", &self.temperature)
+			.field("max_tokens", &self.max_tokens)
+			.field("stop_sequences", &self.stop_sequences)
+			.field("force_json", &self.force_json)
+			.field("files", &self.files)
+			.finish_non_exhaustive()
+	}
 }
 impl Client {
 	/// Create a new client using default config (reads from environment).
@@ -24,9 +49,10 @@ impl Client {
 
 	/// Create a new client with explicit config.
 	pub fn with_config(config: config::AppConfig) -> Self {
+		let backend = backend_for_model(Model::default(), &config);
 		Self {
 			config,
-			model: Model::default(),
+			backend,
 			temperature: None,
 			max_tokens: None,
 			stop_sequences: None,
@@ -36,7 +62,7 @@ impl Client {
 	}
 
 	pub fn model(mut self, model: Model) -> Self {
-		self.model = model;
+		self.backend = backend_for_model(model, &self.config);
 		self
 	}
 
@@ -85,15 +111,46 @@ impl Client {
 	}
 
 	pub async fn conversation(&self, conv: &Conversation) -> Result<Response> {
-		match self.model {
-			Model::Fast => {
-				let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-				ollama::ask_ollama(conv, self.temperature, self.max_tokens, stop_seqs, self.force_json).await
-			}
-			_ => {
-				let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-				claude::ask_claude(&self.config, conv, self.model, self.temperature, self.max_tokens, stop_seqs, self.force_json, &self.files).await
-			}
+		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
+		let request = Request {
+			conversation: conv,
+			temperature: self.temperature,
+			max_tokens: self.max_tokens,
+			stop_sequences: stop_seqs,
+			force_json: self.force_json,
+			files: &self.files,
+		};
+		self.backend.conversation(&request).await
+	}
+}
+
+fn backend_for_model(model: Model, config: &config::AppConfig) -> Box<dyn Backend> {
+	match model {
+		Model::Fast => Box::new(ollama::Ollama {
+			model: "qwen3.5:9b".to_string(),
+			url: "http://localhost:11434/v1/chat/completions".to_string(),
+		}),
+		Model::Medium => {
+			let api_key = config
+				.claude_token
+				.clone()
+				.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+				.expect("CLAUDE_TOKEN not set in config or environment");
+			Box::new(claude::Claude {
+				api_key,
+				model: claude::ClaudeModel::Sonnet45,
+			})
+		}
+		Model::Slow => {
+			let api_key = config
+				.claude_token
+				.clone()
+				.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+				.expect("CLAUDE_TOKEN not set in config or environment");
+			Box::new(claude::Claude {
+				api_key,
+				model: claude::ClaudeModel::Opus41,
+			})
 		}
 	}
 }

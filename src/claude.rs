@@ -2,134 +2,129 @@ use std::str::FromStr as _;
 
 use eyre::{Result, bail};
 use futures::stream::StreamExt;
-use reqwest::{
-	Client,
-	header::{CONTENT_TYPE, HeaderMap, HeaderValue},
-};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{Conversation, FileAttachment, Model, Response, Role, config::AppConfig};
+use crate::{Backend, Conversation, FileAttachment, Request, Response, Role};
+
+pub(crate) struct Claude {
+	pub api_key: String,
+	pub model: ClaudeModel,
+}
+
+impl Backend for Claude {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
+		Box::pin(self.do_conversation(request))
+	}
+}
 
 pub struct Cost {
 	pub million_input_tokens: f32,
 	pub million_output_tokens: f32,
 }
-///docs: https://docs.claude.com/claude/reference/messages_post
-pub async fn ask_claude<T: AsRef<str>>(
-	config: &AppConfig,
-	conversation: &Conversation,
-	model: Model,
-	temperature: Option<f32>,
-	requested_max_tokens: Option<usize>,
-	stop_sequences: Option<Vec<T>>,
-	force_json: bool,
-	files: &[FileAttachment],
-) -> Result<Response> {
-	let mut conversation = ClaudeConversation::from(conversation);
 
-	// Prepend files to the first user message
-	if !files.is_empty() {
-		if let Some(first_user_msg) = conversation.messages.iter_mut().find(|m| m.role == "user") {
-			let mut file_blocks: Vec<ClaudeContentBlock> = files.iter().map(|f| file_to_content_block(f)).collect();
+impl Claude {
+	///docs: https://docs.claude.com/claude/reference/messages_post
+	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
+		let mut conversation = ClaudeConversation::from(request.conversation);
 
-			// Convert existing content to blocks and prepend file blocks
-			match &first_user_msg.content {
-				ClaudeMessageContent::Text(text) => {
-					file_blocks.push(ClaudeContentBlock::Text { text: text.clone() });
-					first_user_msg.content = ClaudeMessageContent::ContentBlocks(file_blocks);
-				}
-				ClaudeMessageContent::ContentBlocks(existing_blocks) => {
-					file_blocks.extend(existing_blocks.clone());
-					first_user_msg.content = ClaudeMessageContent::ContentBlocks(file_blocks);
+		// Prepend files to the first user message
+		if !request.files.is_empty() {
+			if let Some(first_user_msg) = conversation.messages.iter_mut().find(|m| m.role == "user") {
+				let mut file_blocks: Vec<ClaudeContentBlock> = request.files.iter().map(|f| file_to_content_block(f)).collect();
+
+				// Convert existing content to blocks and prepend file blocks
+				match &first_user_msg.content {
+					ClaudeMessageContent::Text(text) => {
+						file_blocks.push(ClaudeContentBlock::Text { text: text.clone() });
+						first_user_msg.content = ClaudeMessageContent::ContentBlocks(file_blocks);
+					}
+					ClaudeMessageContent::ContentBlocks(existing_blocks) => {
+						file_blocks.extend(existing_blocks.clone());
+						first_user_msg.content = ClaudeMessageContent::ContentBlocks(file_blocks);
+					}
 				}
 			}
 		}
-	}
 
-	let api_key = config
-		.claude_token
-		.clone()
-		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-		.expect("CLAUDE_TOKEN not set in config or environment");
-	let url = "https://api.anthropic.com/v1/messages";
+		let url = "https://api.anthropic.com/v1/messages";
 
-	// Header {{{
-	let mut headers = HeaderMap::new();
-	headers.insert("x-api-key", HeaderValue::from_str(&api_key).unwrap());
-	headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01")); // API standard edition, does not influence model versions
-	headers.insert("anthropic-beta", HeaderValue::from_static("output-128k-2025-02-19,structured-outputs-2025-11-13"));
-	headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-	//,}}}
+		// Header {{{
+		let mut headers = HeaderMap::new();
+		headers.insert("x-api-key", HeaderValue::from_str(&self.api_key).unwrap());
+		headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01")); // API standard edition, does not influence model versions
+		headers.insert("anthropic-beta", HeaderValue::from_static("output-128k-2025-02-19,structured-outputs-2025-11-13"));
+		headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+		//,}}}
 
-	let request_builder = Client::new().post(url).headers(headers);
+		let request_builder = reqwest::Client::new().post(url).headers(headers);
 
-	let system_message = match conversation.messages[0].role == "system" {
-		true => {
-			let system_message = conversation.messages.remove(0);
-			Some(system_message.content)
-		}
-		false => None,
-	};
+		let system_message = match conversation.messages[0].role == "system" {
+			true => {
+				let system_message = conversation.messages.remove(0);
+				Some(system_message.content)
+			}
+			false => None,
+		};
 
-	let claude_model = ClaudeModel::from(model);
-	let max_tokens = match requested_max_tokens {
-		Some(max_tokens) => max_tokens.min(claude_model.max_tokens()),
-		_ => claude_model.max_tokens(),
-	};
+		let max_tokens = match request.max_tokens {
+			Some(max_tokens) => max_tokens.min(self.model.max_tokens()),
+			_ => self.model.max_tokens(),
+		};
 
-	// Payload {{{
-	let mut payload = json!({
-		"model": claude_model.to_str(),
-		"temperature": temperature.unwrap_or(0.0),
-		"max_tokens": max_tokens,
-		"messages": conversation.messages
-	});
-	if let Some(stop_seqs) = stop_sequences {
-		let stop_seqs_str: Vec<String> = stop_seqs.into_iter().map(|s| s.as_ref().to_string()).collect();
-		payload.as_object_mut().unwrap().insert("stop_sequences".to_string(), serde_json::json!(stop_seqs_str));
-	}
-	if let Some(system_message) = system_message {
-		payload.as_object_mut().unwrap().insert("system".to_string(), serde_json::json!(system_message));
-	}
-	if force_json {
-		// Use prefill approach - Claude's structured outputs require strict schemas with
-		// additionalProperties: false, which doesn't work for generic JSON responses.
-		// Prefill works universally across all models.
-		conversation.messages.push(ClaudeMessage {
-			role: "assistant",
-			content: ClaudeMessageContent::Text("{".to_string()),
+		// Payload {{{
+		let mut payload = json!({
+			"model": self.model.to_str(),
+			"temperature": request.temperature.unwrap_or(0.0),
+			"max_tokens": max_tokens,
+			"messages": conversation.messages
 		});
-		payload.as_object_mut().unwrap().insert("messages".to_string(), serde_json::json!(conversation.messages));
-	}
-	//,}}}
-
-	let mut response = match requested_max_tokens {
-		Some(max_tokens) if max_tokens <= 4096 => {
-			payload.as_object_mut().unwrap().insert("stream".to_owned(), serde_json::json!(false));
-			tracing::info!("getting through a rest get");
-			tracing::debug!(?payload);
-			rest_g(request_builder.json(&payload)).await?
+		if let Some(ref stop_seqs) = request.stop_sequences {
+			payload.as_object_mut().unwrap().insert("stop_sequences".to_string(), serde_json::json!(stop_seqs));
 		}
-		_ => {
-			payload.as_object_mut().unwrap().insert("stream".to_owned(), serde_json::json!(true));
-			tracing::info!("getting through a stream");
-			tracing::debug!(?payload);
-			stream(request_builder.json(&payload), claude_model).await?
+		if let Some(system_message) = system_message {
+			payload.as_object_mut().unwrap().insert("system".to_string(), serde_json::json!(system_message));
 		}
-	};
+		if request.force_json {
+			// Use prefill approach - Claude's structured outputs require strict schemas with
+			// additionalProperties: false, which doesn't work for generic JSON responses.
+			// Prefill works universally across all models.
+			conversation.messages.push(ClaudeMessage {
+				role: "assistant",
+				content: ClaudeMessageContent::Text("{".to_string()),
+			});
+			payload.as_object_mut().unwrap().insert("messages".to_string(), serde_json::json!(conversation.messages));
+		}
+		//,}}}
 
-	// Prepend the "{" we used for prefilling when force_json was enabled
-	if force_json {
-		response.text = format!("{{{}", response.text);
+		let mut response = match request.max_tokens {
+			Some(max_tokens) if max_tokens <= 4096 => {
+				payload.as_object_mut().unwrap().insert("stream".to_owned(), serde_json::json!(false));
+				tracing::info!("getting through a rest get");
+				tracing::debug!(?payload);
+				rest_g(request_builder.json(&payload)).await?
+			}
+			_ => {
+				payload.as_object_mut().unwrap().insert("stream".to_owned(), serde_json::json!(true));
+				tracing::info!("getting through a stream");
+				tracing::debug!(?payload);
+				stream(request_builder.json(&payload), &self.model).await?
+			}
+		};
+
+		// Prepend the "{" we used for prefilling when force_json was enabled
+		if request.force_json {
+			response.text = format!("{{{}", response.text);
+		}
+
+		Ok(response)
 	}
-
-	Ok(response)
 }
-#[allow(dead_code)]
+
 #[derive(Debug, Eq, PartialEq)]
 /// ref: https://docs.claude.com/en/docs/about-claude/models/all-models
-enum ClaudeModel {
+pub(crate) enum ClaudeModel {
 	Haiku45,
 	Sonnet45,
 	Opus41,
@@ -179,16 +174,6 @@ impl std::str::FromStr for ClaudeModel {
 			_ if s.to_lowercase().contains("opus") => Self::Opus41,
 			_ => bail!("Unknown model: {s}"),
 		})
-	}
-}
-
-impl From<Model> for ClaudeModel {
-	fn from(model: Model) -> Self {
-		match model {
-			Model::Fast => unreachable!("Model::Fast is handled by the Ollama backend"),
-			Model::Medium => Self::Sonnet45,
-			Model::Slow => Self::Opus41,
-		}
 	}
 }
 
@@ -352,7 +337,7 @@ struct ClaudeUsage {
 }
 
 // stream {{{
-async fn stream(request_builder: reqwest::RequestBuilder, model: ClaudeModel) -> Result<Response> {
+async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -> Result<Response> {
 	#[derive(Debug, Deserialize, Serialize)]
 	struct Delta {
 		text: String,

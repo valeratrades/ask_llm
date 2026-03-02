@@ -1,81 +1,88 @@
 use eyre::{Result, bail};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::{Conversation, Response, Role};
+use crate::{Backend, Request, Response, Role};
 
-const OLLAMA_MODEL: &str = "qwen3.5:9b";
-const OLLAMA_URL: &str = "http://localhost:11434/v1/chat/completions";
+pub(crate) struct Ollama {
+	pub model: String,
+	pub url: String,
+}
 
-pub async fn ask_ollama(
-	conversation: &Conversation,
-	temperature: Option<f32>,
-	requested_max_tokens: Option<usize>,
-	stop_sequences: Option<Vec<impl AsRef<str>>>,
-	force_json: bool,
-) -> Result<Response> {
-	let mut messages: Vec<OllamaMessage> = Vec::new();
-
-	for message in &conversation.0 {
-		let role = match message.role {
-			Role::System => "system",
-			Role::User => "user",
-			Role::Assistant => "assistant",
-		};
-		let text = match &message.content {
-			crate::MessageContent::Text(t) => t.clone(),
-			_ => bail!("Ollama backend only supports text messages"),
-		};
-		messages.push(OllamaMessage {
-			role: role.to_string(),
-			content: text,
-		});
+impl Backend for Ollama {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
+		Box::pin(self.do_conversation(request))
 	}
+}
 
-	if force_json {
-		// Append instruction to return JSON
-		if let Some(last) = messages.last_mut() {
-			if last.role == "user" {
-				last.content.push_str("\n\nRespond with valid JSON only, no other text.");
+impl Ollama {
+	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
+		if !request.files.is_empty() {
+			bail!("Ollama backend does not support file attachments");
+		}
+
+		let mut messages: Vec<OllamaMessage> = Vec::new();
+
+		for message in &request.conversation.0 {
+			let role = match message.role {
+				Role::System => "system",
+				Role::User => "user",
+				Role::Assistant => "assistant",
+			};
+			let text = match &message.content {
+				crate::MessageContent::Text(t) => t.clone(),
+				_ => bail!("Ollama backend only supports text messages"),
+			};
+			messages.push(OllamaMessage {
+				role: role.to_string(),
+				content: text,
+			});
+		}
+
+		if request.force_json {
+			// Append instruction to return JSON
+			if let Some(last) = messages.last_mut() {
+				if last.role == "user" {
+					last.content.push_str("\n\nRespond with valid JSON only, no other text.");
+				}
 			}
 		}
+
+		let mut ollama_request = OllamaRequest {
+			model: self.model.clone(),
+			messages,
+			temperature: request.temperature.unwrap_or(0.0),
+			max_tokens: request.max_tokens,
+			stop: None,
+			stream: false,
+		};
+
+		if let Some(ref seqs) = request.stop_sequences {
+			ollama_request.stop = Some(seqs.iter().map(|s| s.to_string()).collect());
+		}
+
+		let response = reqwest::Client::new().post(&self.url).json(&ollama_request).send().await?;
+
+		let status = response.status();
+		if !status.is_success() {
+			let body = response.text().await.unwrap_or_default();
+			bail!("Ollama request failed ({status}): {body}");
+		}
+
+		let value: serde_json::Value = response.json().await?;
+		tracing::debug!(?value);
+
+		let parsed: OllamaResponse = serde_json::from_value(value.clone()).inspect_err(|e| {
+			eprintln!(
+				"Failed to parse Ollama response: {}\n{e:?}",
+				serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value))
+			);
+		})?;
+
+		let text = parsed.choices.into_iter().next().map(|c| c.message.content).unwrap_or_default();
+
+		// Ollama/local models have zero API cost
+		Ok(Response::new(text, 0.0))
 	}
-
-	let mut request = OllamaRequest {
-		model: OLLAMA_MODEL.to_string(),
-		messages,
-		temperature: temperature.unwrap_or(0.0),
-		max_tokens: requested_max_tokens,
-		stop: None,
-		stream: false,
-	};
-
-	if let Some(seqs) = stop_sequences {
-		request.stop = Some(seqs.iter().map(|s| s.as_ref().to_string()).collect());
-	}
-
-	let response = Client::new().post(OLLAMA_URL).json(&request).send().await?;
-
-	let status = response.status();
-	if !status.is_success() {
-		let body = response.text().await.unwrap_or_default();
-		bail!("Ollama request failed ({status}): {body}");
-	}
-
-	let value: serde_json::Value = response.json().await?;
-	tracing::debug!(?value);
-
-	let parsed: OllamaResponse = serde_json::from_value(value.clone()).inspect_err(|e| {
-		eprintln!(
-			"Failed to parse Ollama response: {}\n{e:?}",
-			serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value))
-		);
-	})?;
-
-	let text = parsed.choices.into_iter().next().map(|c| c.message.content).unwrap_or_default();
-
-	// Ollama/local models have zero API cost
-	Ok(Response::new(text, 0.0))
 }
 
 #[derive(Debug, Serialize)]
