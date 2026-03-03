@@ -11,11 +11,11 @@ async fn main() {
 
 	let config = AppConfig::try_build(cli.settings).expect("Failed to build config");
 
-	let mut client = Client::with_config(config).model(cli.model);
+	let mut client = Client::new(config).model(cli.model);
 	if cli.fast {
 		client = client.max_tokens(4096);
 	}
-	let answer = client.ask(cli.question).await.unwrap().text;
+	let answer: String = client.ask(cli.question).await.unwrap().text;
 
 	println!("{answer:#}");
 }
