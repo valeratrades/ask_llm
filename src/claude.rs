@@ -369,7 +369,9 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 		response_type: String,
 	}
 
+	let ttfb_start = std::time::Instant::now();
 	let mut response_stream = request_builder.send().await?.bytes_stream();
+	let ttfb = ttfb_start.elapsed();
 
 	let mut accumulated_message = String::new();
 
@@ -406,6 +408,7 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 		text: accumulated_message,
 		cost_cents: cost,
 		duration: std::time::Duration::ZERO,
+		overhead: ttfb,
 		model: String::new(),
 		thinking: ThinkingLevel::None,
 	})
@@ -414,7 +417,9 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 
 // rest_g {{{
 async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
+	let ttfb_start = std::time::Instant::now();
 	let value = request_builder.send().await?.json::<Value>().await?;
+	let ttfb = ttfb_start.elapsed();
 	tracing::debug!(?value);
 	let response = serde_json::from_value::<ClaudeResponse>(value.clone()).inspect_err(|e| {
 		eprintln!(
@@ -428,8 +433,9 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 		bail!("Claude refused to process the request. This may be due to content policy restrictions.");
 	}
 
-	//let response = request_builder.send().await?.json::<ClaudeResponse>().await?;
-	return Ok(response.into());
+	let mut resp: Response = response.into();
+	resp.overhead = ttfb;
+	return Ok(resp);
 
 	#[allow(dead_code)]
 	#[derive(Debug, Deserialize)]
@@ -462,6 +468,7 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 				text: response.text(),
 				cost_cents: response.cost_cents(),
 				duration: std::time::Duration::ZERO,
+				overhead: std::time::Duration::ZERO,
 				model: String::new(),
 				thinking: ThinkingLevel::None,
 			}

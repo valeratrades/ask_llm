@@ -113,6 +113,8 @@ pub struct FileAttachment {
 }
 #[derive(Clone, Copy, Debug, Default, derive_more::FromStr)]
 pub enum Model {
+	Cheap,
+	Translate,
 	Fast,
 	#[default]
 	Medium,
@@ -121,27 +123,30 @@ pub enum Model {
 impl Model {
 	fn into_backend(self, config: &config::AppConfig) -> Box<dyn Backend> {
 		match self {
-			Model::Fast => Box::new(ollama::Ollama {
-				model: "qwen3.5:9b".to_string(),
+			Model::Cheap => Box::new(ollama::Ollama {
+				model: "qwen3.5:4b".to_string(),
 				url: "http://localhost:11434/api/chat".to_string(),
 			}),
+			Model::Translate => Box::new(ollama::Ollama {
+				model: "translategemma:4b".to_string(),
+				url: "http://localhost:11434/api/chat".to_string(),
+			}),
+			Model::Fast => {
+				let api_key = claude_api_key(config);
+				Box::new(claude::Claude {
+					api_key,
+					model: claude::ClaudeModel::Haiku45,
+				})
+			}
 			Model::Medium => {
-				let api_key = config
-					.claude_token
-					.clone()
-					.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-					.expect("CLAUDE_TOKEN not set in config or environment");
+				let api_key = claude_api_key(config);
 				Box::new(claude::Claude {
 					api_key,
 					model: claude::ClaudeModel::Sonnet45,
 				})
 			}
 			Model::Slow => {
-				let api_key = config
-					.claude_token
-					.clone()
-					.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-					.expect("CLAUDE_TOKEN not set in config or environment");
+				let api_key = claude_api_key(config);
 				Box::new(claude::Claude {
 					api_key,
 					model: claude::ClaudeModel::Opus41,
@@ -149,6 +154,14 @@ impl Model {
 			}
 		}
 	}
+}
+
+fn claude_api_key(config: &config::AppConfig) -> String {
+	config
+		.claude_token
+		.clone()
+		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+		.expect("CLAUDE_TOKEN not set in config or environment")
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub enum ThinkingLevel {
@@ -237,6 +250,8 @@ pub struct Response {
 	pub text: String,
 	pub cost_cents: f32,
 	pub duration: std::time::Duration,
+	/// Overhead before generation starts (model load for Ollama, network TTFB for Claude).
+	pub overhead: std::time::Duration,
 	pub model: String,
 	pub thinking: ThinkingLevel,
 }
@@ -366,11 +381,13 @@ impl std::fmt::Display for ThinkingLevel {
 impl std::fmt::Display for Response {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		let secs = self.duration.as_secs_f32();
+		let overhead = self.overhead.as_secs_f32();
+		let gen_secs = secs - overhead;
 		let chars = self.text.len();
-		let ms_per_char = if chars > 0 { secs * 1000.0 / chars as f32 } else { 0.0 };
+		let ms_per_char = if chars > 0 { gen_secs * 1000.0 / chars as f32 } else { 0.0 };
 		write!(
 			f,
-			"[model: {} | thinking: {} | cost: {:.4}¢ | time: {secs:.1}s | {ms_per_char:.1}ms/char]",
+			"[model: {} | thinking: {} | cost: {:.4}¢ | overhead: {overhead:.1}s | gen: {gen_secs:.1}s | {ms_per_char:.1}ms/char]",
 			self.model, self.thinking, self.cost_cents
 		)
 	}

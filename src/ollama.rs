@@ -75,10 +75,12 @@ impl Ollama {
 			);
 		})?;
 
+		let overhead_nanos = parsed.load_duration + parsed.prompt_eval_duration;
 		Ok(Response {
 			text: parsed.message.content,
 			cost_cents: 0.0,
 			duration: std::time::Duration::ZERO,
+			overhead: std::time::Duration::from_nanos(overhead_nanos),
 			model: self.model.clone(),
 			thinking: request.thinking,
 		})
@@ -118,4 +120,8 @@ struct OllamaMessage {
 #[derive(Debug, Deserialize)]
 struct OllamaResponse {
 	message: OllamaMessage,
+	#[serde(default)]
+	load_duration: u64,
+	#[serde(default)]
+	prompt_eval_duration: u64,
 }

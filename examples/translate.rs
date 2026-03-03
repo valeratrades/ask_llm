@@ -15,8 +15,13 @@ workers for the new landscape of employment.";
 async fn main() {
 	v_utils::clientside!();
 
+	let model: Model = std::env::args()
+		.nth(1)
+		.map(|s| s.parse().expect("valid model: Cheap, Translate, Fast, Medium, Slow"))
+		.unwrap_or(Model::Translate);
+
 	let response = Client::default()
-		.model(Model::Fast)
+		.model(model)
 		.ask(format!(
 			"Translate the following English text to German. Output ONLY the translation, nothing else.\n\n{PARAGRAPHS}"
 		))
