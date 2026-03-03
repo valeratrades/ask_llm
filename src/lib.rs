@@ -156,13 +156,6 @@ impl Model {
 	}
 }
 
-fn claude_api_key(config: &config::AppConfig) -> String {
-	config
-		.claude_token
-		.clone()
-		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-		.expect("CLAUDE_TOKEN not set in config or environment")
-}
 #[derive(Clone, Copy, Debug, Default)]
 pub enum ThinkingLevel {
 	#[default]
@@ -317,6 +310,13 @@ impl Response {
 
 pub(crate) trait Backend: Send + Sync {
 	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
+}
+fn claude_api_key(config: &config::AppConfig) -> String {
+	config
+		.claude_token
+		.clone()
+		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
+		.expect("CLAUDE_TOKEN not set in config or environment")
 }
 
 pub(crate) struct Request<'a> {
