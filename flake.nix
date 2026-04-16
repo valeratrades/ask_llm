@@ -4,9 +4,9 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-utils.url = "github:numtide/flake-utils";
     pre-commit-hooks.url = "github:cachix/git-hooks.nix/ca5b894d3e3e151ffc1db040b6ce4dcc75d31c37";
-    v-utils.url = "github:valeratrades/.github/v1.4";
+    v_flakes.url = "github:valeratrades/v_flakes/v1.6";
   };
-  outputs = { nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v-utils, ... }:
+  outputs = { self, nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v_flakes }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = builtins.trace "flake.nix sourced" [ (import rust-overlay) ];
@@ -16,29 +16,29 @@
         rust = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
           extensions = [ "rust-src" "rust-analyzer" "rust-docs" "rustc-codegen-cranelift-preview" ];
         });
-        pre-commit-check = pre-commit-hooks.lib.${system}.run (v-utils.files.preCommit { inherit pkgs; });
+        pre-commit-check = pre-commit-hooks.lib.${system}.run (v_flakes.files.preCommit { inherit pkgs; });
         manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
         pname = manifest.name;
         stdenv = pkgs.stdenvAdapters.useMoldLinker pkgs.stdenv;
 
-        github = v-utils.github {
-          inherit pkgs pname;
-          langs = [ "rs" ];
-          lastSupportedVersion = "nightly-2025-03-13";
-          jobs.default = true;
-          jobs.errors.augment = [ "rust-miri" ];
-        };
-        rs = v-utils.rs {
+        rs = v_flakes.rs {
           inherit pkgs rust;
         };
-        readme = v-utils.readme-fw {
+        github = v_flakes.github {
+          inherit pkgs pname rs;
+          enable = true;
+          jobs.default = true;
+          jobs.errors.augment = [ "rust-miri" ];
+          lastSupportedVersion = "nightly-2025-03-13";
+        };
+        readme = v_flakes.readme-fw {
           inherit pkgs pname;
           lastSupportedVersion = "nightly-1.86";
           rootDir = ./.;
           defaults = true;
           badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
         };
-        combined = v-utils.utils.combine [ github readme rs ];
+        combined = v_flakes.utils.combine [ github readme rs ];
       in
       {
         packages =

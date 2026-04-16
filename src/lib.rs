@@ -1,3 +1,4 @@
+#![feature(default_field_values)]
 use std::{future::Future, pin::Pin};
 
 use eyre::{Result, bail};
@@ -5,19 +6,6 @@ use eyre::{Result, bail};
 mod claude;
 mod ollama;
 
-/// Client for interacting with LLMs.
-///
-/// Default settings produce a simple oneshot call with Model::Medium.
-pub struct Client {
-	config: config::AppConfig,
-	backend: Box<dyn Backend>,
-	temperature: Option<f32>,
-	max_tokens: Option<usize>,
-	stop_sequences: Option<Vec<String>>,
-	force_json: bool,
-	files: Vec<FileAttachment>,
-	thinking: ThinkingLevel,
-}
 impl Client {
 	/// Create a new client using default config (reads from environment).
 	pub fn new(config: config::AppConfig) -> Self {
@@ -106,20 +94,6 @@ impl Client {
 	}
 }
 
-#[derive(Clone, Debug)]
-pub struct FileAttachment {
-	pub base64_data: String,
-	pub media_type: String,
-}
-#[derive(Clone, Copy, Debug, Default, derive_more::FromStr)]
-pub enum Model {
-	Cheap,
-	Translate,
-	Fast,
-	#[default]
-	Medium,
-	Slow,
-}
 impl Model {
 	fn into_backend(self, config: &config::AppConfig) -> Box<dyn Backend> {
 		match self {
@@ -156,44 +130,6 @@ impl Model {
 	}
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub enum ThinkingLevel {
-	#[default]
-	None,
-	Low,
-	Medium,
-	High,
-}
-#[derive(Clone, Copy, Debug)]
-pub enum Role {
-	System,
-	User,
-	Assistant,
-}
-#[derive(Clone, Debug)]
-pub enum MessageContent {
-	Text(String),
-	Image { base64_data: String, media_type: String },
-	TextAndImages { text: String, images: Vec<ImageContent> },
-	Document { base64_data: String, media_type: String },
-	Mixed { parts: Vec<ContentPart> },
-}
-#[derive(Clone, Debug)]
-pub enum ContentPart {
-	Text(String),
-	Image { base64_data: String, media_type: String },
-	Document { base64_data: String, media_type: String },
-}
-#[derive(Clone, Debug)]
-pub struct ImageContent {
-	pub base64_data: String,
-	pub media_type: String,
-}
-#[derive(Clone, Debug)]
-pub struct Message {
-	pub(crate) role: Role,
-	pub(crate) content: MessageContent,
-}
 impl Message {
 	fn new(role: Role, content: impl Into<String>) -> Self {
 		Self {
@@ -217,8 +153,6 @@ impl Message {
 	}
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct Conversation(pub Vec<Message>);
 impl Conversation {
 	pub fn new() -> Self {
 		Self(Vec::new())
@@ -238,16 +172,6 @@ impl Conversation {
 	}
 }
 
-#[derive(Debug)]
-pub struct Response {
-	pub text: String,
-	pub cost_cents: f32,
-	pub duration: std::time::Duration,
-	/// Overhead before generation starts (model load for Ollama, network TTFB for Claude).
-	pub overhead: std::time::Duration,
-	pub model: String,
-	pub thinking: ThinkingLevel,
-}
 impl Response {
 	/// Extract codeblocks with optional extension filtering.
 	/// If extensions is None or empty, all codeblocks are returned.
@@ -308,6 +232,97 @@ impl Response {
 	}
 }
 
+pub mod config;
+mod shortcuts;
+pub use shortcuts::*;
+
+#[derive(Debug)]
+pub struct Response {
+	pub text: String,
+	pub cost_cents: f32,
+	pub duration: std::time::Duration,
+	/// Overhead before generation starts (model load for Ollama, network TTFB for Claude).
+	pub overhead: std::time::Duration,
+	pub model: String,
+	pub thinking: ThinkingLevel,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Conversation(pub Vec<Message>);
+
+#[derive(Clone, Debug)]
+pub struct Message {
+	pub(crate) role: Role,
+	pub(crate) content: MessageContent,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImageContent {
+	pub base64_data: String,
+	pub media_type: String,
+}
+
+#[derive(Clone, Debug)]
+pub enum ContentPart {
+	Text(String),
+	Image { base64_data: String, media_type: String },
+	Document { base64_data: String, media_type: String },
+}
+
+#[derive(Clone, Debug)]
+pub enum MessageContent {
+	Text(String),
+	Image { base64_data: String, media_type: String },
+	TextAndImages { text: String, images: Vec<ImageContent> },
+	Document { base64_data: String, media_type: String },
+	Mixed { parts: Vec<ContentPart> },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Role {
+	System,
+	User,
+	Assistant,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub enum ThinkingLevel {
+	#[default]
+	None,
+	Low,
+	Medium,
+	High,
+}
+
+#[derive(Clone, Copy, Debug, Default, derive_more::FromStr)]
+pub enum Model {
+	Cheap,
+	Translate,
+	Fast,
+	#[default]
+	Medium,
+	Slow,
+}
+
+#[derive(Clone, Debug)]
+pub struct FileAttachment {
+	pub base64_data: String,
+	pub media_type: String,
+}
+
+/// Client for interacting with LLMs.
+///
+/// Default settings produce a simple oneshot call with Model::Medium.
+pub struct Client {
+	config: config::AppConfig,
+	backend: Box<dyn Backend>,
+	temperature: Option<f32>,
+	max_tokens: Option<usize>,
+	stop_sequences: Option<Vec<String>>,
+	force_json: bool,
+	files: Vec<FileAttachment>,
+	thinking: ThinkingLevel,
+}
 pub(crate) trait Backend: Send + Sync {
 	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
 }
@@ -357,9 +372,6 @@ fn mime_type_from_extension(ext: &str) -> &'static str {
 		_ => "application/octet-stream",
 	}
 }
-pub mod config;
-mod shortcuts;
-pub use shortcuts::*;
 
 impl Default for Client {
 	fn default() -> Self {
