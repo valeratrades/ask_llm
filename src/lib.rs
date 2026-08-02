@@ -4,6 +4,7 @@ use std::{future::Future, pin::Pin};
 use eyre::{Result, bail};
 
 mod claude;
+mod deepseek;
 mod ollama;
 
 impl Client {
@@ -126,6 +127,7 @@ impl Model {
 					model: claude::ClaudeModel::Opus41,
 				})
 			}
+			Model::DeepSeek => Box::new(deepseek::DeepSeek { api_key: deepseek_api_key(config) }),
 		}
 	}
 }
@@ -302,6 +304,7 @@ pub enum Model {
 	#[default]
 	Medium,
 	Slow,
+	DeepSeek,
 }
 
 #[derive(Clone, Debug)]
@@ -332,6 +335,13 @@ fn claude_api_key(config: &config::AppConfig) -> String {
 		.clone()
 		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
 		.expect("CLAUDE_TOKEN not set in config or environment")
+}
+fn deepseek_api_key(config: &config::AppConfig) -> String {
+	config
+		.deepseek_token
+		.clone()
+		.or_else(|| std::env::var("DEEPSEEK_KEY").ok())
+		.expect("DEEPSEEK_KEY not set in config or environment")
 }
 
 pub(crate) struct Request<'a> {

@@ -6,4 +6,5 @@ use v_utils::macros::Settings;
 #[cfg_attr(feature = "cli", derive(Settings))]
 pub struct AppConfig {
 	pub claude_token: Option<String>,
+	pub deepseek_token: Option<String>,
 }

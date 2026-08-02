@@ -18,6 +18,12 @@
 - Move `.readme_assets/` → `docs/.readme_assets/` (v_flakes v1.6 convention).
 - Update flake to `v_flakes` v1.6.
 
+### v2.2.3
+
+- **New**: `Model::DeepSeek` variant, backed by a new `deepseek` backend module hitting `https://api.deepseek.com/chat/completions` with `deepseek-v4-flash`.
+- **New**: `config::AppConfig::deepseek_token`, falling back to the `DEEPSEEK_KEY` env var.
+- `ThinkingLevel` maps onto DeepSeek's `thinking` request param (`None` disables it explicitly, since the API enables thinking by default).
+
 ---
 
 ## v2.1.x and earlier
