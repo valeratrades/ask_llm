@@ -4,11 +4,6 @@ use serde_json::{Value, json};
 
 use crate::{Backend, Request, Response, Role, ThinkingLevel};
 
-pub struct Cost {
-	pub million_input_tokens: f32,
-	pub million_output_tokens: f32,
-}
-
 /// `deepseek-chat`/`deepseek-reasoner` were discontinued 2026-07-24, thinking is now a request param instead of a model
 const MODEL: &str = "deepseek-v4-flash";
 /// cache-miss rates, ref: https://api-docs.deepseek.com/quick_start/pricing
@@ -16,6 +11,10 @@ const COST: Cost = Cost {
 	million_input_tokens: 0.14,
 	million_output_tokens: 0.28,
 };
+pub struct Cost {
+	pub million_input_tokens: f32,
+	pub million_output_tokens: f32,
+}
 
 pub(crate) struct DeepSeek {
 	pub api_key: String,

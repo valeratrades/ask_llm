@@ -1,5 +1,5 @@
 #![feature(default_field_values)]
-use std::{future::Future, pin::Pin};
+use std::{future::Future, path::Path, pin::Pin};
 
 use eyre::{Result, bail};
 
@@ -63,7 +63,7 @@ impl Client {
 	}
 
 	/// Append a file from a filesystem path.
-	pub fn append_file_from_path(self, path: impl AsRef<std::path::Path>) -> Result<Self> {
+	pub fn append_file_from_path(self, path: impl AsRef<Path>) -> Result<Self> {
 		let path = path.as_ref();
 		let data = std::fs::read(path)?;
 		let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
