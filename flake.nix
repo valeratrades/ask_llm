@@ -1,21 +1,15 @@
 {
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-overlay.url = "github:oxalica/rust-overlay";
-    flake-utils.url = "github:numtide/flake-utils";
-    pre-commit-hooks.url = "github:cachix/git-hooks.nix/ca5b894d3e3e151ffc1db040b6ce4dcc75d31c37";
-    v_flakes.url = "github:valeratrades/v_flakes/v1.6";
+    v_flakes.url = "github:valeratrades/v_flakes?ref=v1.6";
   };
-  outputs = { self, nixpkgs, rust-overlay, flake-utils, pre-commit-hooks, v_flakes }:
+  outputs = { self, v_flakes }:
+    let
+      inherit (v_flakes) flake-utils pre-commit-hooks;
+    in
     flake-utils.lib.eachDefaultSystem (system:
       let
-        overlays = builtins.trace "flake.nix sourced" [ (import rust-overlay) ];
-        pkgs = import nixpkgs {
-          inherit system overlays;
-        };
-        rust = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default.override {
-          extensions = [ "rust-src" "rust-analyzer" "rust-docs" "rustc-codegen-cranelift-preview" ];
-        });
+        pkgs = import v_flakes.default_nixpkgs { inherit system; };
+        rust = v_flakes.rs.default_nightly system;
         pre-commit-check = pre-commit-hooks.lib.${system}.run (v_flakes.files.preCommit { inherit pkgs; });
         manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
         pname = manifest.name;
@@ -29,7 +23,7 @@
           enable = true;
           jobs.default = true;
           jobs.errors.augment = [ "rust-miri" ];
-          lastSupportedVersion = "nightly-2025-03-13";
+          lastSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
         };
         readme = v_flakes.readme-fw {
           inherit pkgs pname;
@@ -38,7 +32,7 @@
           defaults = true;
           badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
         };
-        combined = v_flakes.utils.combine [ github readme rs ];
+        combined = v_flakes.utils.combine { inherit rust; modules = [ github readme rs ]; };
       in
       {
         packages =
@@ -50,7 +44,7 @@
             };
           in
           {
-            default = rustPlatform.buildRustPackage rec {
+            default = rustPlatform.buildRustPackage {
               inherit pname;
               version = manifest.version;
 
@@ -58,6 +52,7 @@
                 openssl.dev
               ];
               nativeBuildInputs = with pkgs; [ pkg-config ];
+              RUSTC_WRAPPER = ""; # .cargo/config.toml sets sccache, absent in the sandbox
 
               cargoLock.lockFile = ./Cargo.lock;
               src = pkgs.lib.cleanSource ./.;

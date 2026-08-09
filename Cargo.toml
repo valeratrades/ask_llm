@@ -54,6 +54,9 @@ tabs_in_doc_comments = "allow"
 get_first = "allow"
 get_last_with_len = "allow"
 
+[lints.rust]
+unused_features = "allow"
+
 [[example]]
 name = "async"
 path = "examples/async.rs"
