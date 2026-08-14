@@ -21,6 +21,7 @@
 ### v2.2.3
 
 - **New**: `Model::DeepSeek` variant, backed by a new `deepseek` backend module hitting `https://api.deepseek.com/chat/completions` with `deepseek-v4-flash`.
+  upd: nuked it. Not the correct mechanic to attach it through, agent who did this was wrong.
 - **New**: `config::AppConfig::deepseek_token`, falling back to the `DEEPSEEK_KEY` env var.
 - `ThinkingLevel` maps onto DeepSeek's `thinking` request param (`None` disables it explicitly, since the API enables thinking by default).
 
@@ -41,6 +42,13 @@ Anthropic backend rewritten against the current API — the previous request sha
 ### v3.0.1
 
 - Fix: adaptive thinking is billed against `max_tokens` and can consume all of it, so a tight budget returned an empty string with `stop_reason: "max_tokens"`. That now errors instead of silently reading as "the model had nothing to say". Hit `Medium`/`Slow` first, whose thinking runs even at `ThinkingLevel::None`.
+
+## Unreleased
+
+- **Breaking**: `Model::DeepSeek` is gone. A provider is not a tier — `Model::Fast` now points at `deepseek-v4-flash`, so DeepSeek is reached by asking for the cheap remote tier rather than by naming it.
+- **Breaking**: `Model` is `#[non_exhaustive]`.
+- `Model::Fast` needs `DEEPSEEK_KEY` (or `config.deepseek_token`) instead of `CLAUDE_TOKEN`, and drops file/image support — the DeepSeek backend is text-only.
+- Not published: the account 402s on every call until it is funded.
 
 ---
 

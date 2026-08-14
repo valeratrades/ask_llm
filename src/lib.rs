@@ -99,13 +99,7 @@ impl Model {
 				model: "translategemma:4b".to_string(),
 				url: "http://localhost:11434/api/chat".to_string(),
 			}),
-			Model::Fast => {
-				let api_key = claude_api_key(config);
-				Box::new(claude::Claude {
-					api_key,
-					model: claude::ClaudeModel::Sonnet5,
-				})
-			}
+			Model::Fast => Box::new(deepseek::DeepSeek { api_key: deepseek_api_key(config) }),
 			Model::Medium => {
 				let api_key = claude_api_key(config);
 				Box::new(claude::Claude {
@@ -120,7 +114,6 @@ impl Model {
 					model: claude::ClaudeModel::Fable5,
 				})
 			}
-			Model::DeepSeek => Box::new(deepseek::DeepSeek { api_key: deepseek_api_key(config) }),
 		}
 	}
 }
@@ -289,15 +282,15 @@ pub enum ThinkingLevel {
 	High,
 }
 
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, derive_more::FromStr)]
 pub enum Model {
-	Cheap,
-	Translate,
 	Fast,
 	#[default]
 	Medium,
 	Slow,
-	DeepSeek,
+	Cheap,
+	Translate,
 }
 
 #[derive(Clone, Debug)]
