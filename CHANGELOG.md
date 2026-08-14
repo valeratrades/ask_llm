@@ -38,6 +38,10 @@ Anthropic backend rewritten against the current API — the previous request sha
 - `stop_reason: "refusal"` is now surfaced as an error on the streaming path too, not just the REST one.
 - `max_tokens` ceiling raised to 128k on all three tiers; dropped the no-op `output-128k-2025-02-19` beta header.
 
+### v3.0.1
+
+- Fix: adaptive thinking is billed against `max_tokens` and can consume all of it, so a tight budget returned an empty string with `stop_reason: "max_tokens"`. That now errors instead of silently reading as "the model had nothing to say". Hit `Medium`/`Slow` first, whose thinking runs even at `ThinkingLevel::None`.
+
 ---
 
 ## v2.1.x and earlier

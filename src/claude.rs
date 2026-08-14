@@ -10,9 +10,18 @@ use crate::{Backend, Conversation, FileAttachment, Request, Response, Role, Thin
 
 /// `output_config.format` would demand a concrete schema, which this generic-JSON API can't supply
 const FORCE_JSON_SUFFIX: &str = "\n\nRespond with valid JSON only, no other text or markdown fences.";
+
 pub struct Cost {
 	pub million_input_tokens: f32,
 	pub million_output_tokens: f32,
+}
+/// Thinking is billed against `max_tokens` and can consume all of it, leaving zero text behind.
+/// Silently handing back an empty string reads as "the model had nothing to say", so error instead.
+fn starved(stop_reason: Option<&str>, text: &str) -> Result<()> {
+	if stop_reason == Some("max_tokens") && text.trim().is_empty() {
+		bail!("thinking consumed the entire max_tokens budget, leaving no answer; raise max_tokens");
+	}
+	Ok(())
 }
 pub(crate) struct Claude {
 	pub api_key: String,
@@ -388,6 +397,7 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 		stop_reason: Option<String>,
 	}
 
+	let mut stop_reason = None;
 	while let Some(events_batch) = response_stream.next().await {
 		let events_batch = events_batch?;
 		let s = String::from_utf8(events_batch.to_vec()).expect("Found invalid UTF-8");
@@ -396,9 +406,10 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 			let data = chunk.split("\n\n").next().expect("split always yields one element");
 			if let Ok(d) = serde_json::from_str::<serde_json::Value>(data)
 				&& let Ok(delta) = serde_json::from_value::<MessageDelta>(d.get("delta").cloned().unwrap_or_default())
-				&& delta.stop_reason.as_deref() == Some("refusal")
+				&& let Some(r) = delta.stop_reason
 			{
-				refused = true;
+				refused |= r == "refusal";
+				stop_reason = Some(r);
 			}
 		}
 
@@ -410,6 +421,7 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 	if refused {
 		bail!("Claude refused to process the request. This may be due to content policy restrictions.");
 	}
+	starved(stop_reason.as_deref(), &accumulated_message)?;
 
 	let estimated_tokens = accumulated_message.split_whitespace().count() as f32 * 0.7;
 	let cost = (model.cost().million_output_tokens * estimated_tokens) / 1_000_000.0;
@@ -441,6 +453,7 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 	if response.stop_reason == "refusal" {
 		bail!("Claude refused to process the request. This may be due to content policy restrictions.");
 	}
+	starved(Some(&response.stop_reason), &response.text())?;
 
 	let mut resp: Response = response.into();
 	resp.overhead = ttfb;
