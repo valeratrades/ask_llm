@@ -66,7 +66,7 @@ impl DeepSeek {
 		let payload_map = payload.as_object_mut().unwrap();
 		// thinking mode silently discards sampling params
 		if matches!(request.thinking, ThinkingLevel::None) {
-			payload_map.insert("temperature".to_string(), json!(request.temperature.unwrap_or(0.0)));
+			payload_map.insert("temperature".to_string(), json!(0.0));
 		}
 		if let Some(max_tokens) = request.max_tokens {
 			payload_map.insert("max_tokens".to_string(), json!(max_tokens));

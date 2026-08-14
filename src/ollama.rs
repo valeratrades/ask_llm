@@ -47,7 +47,7 @@ impl Ollama {
 			stream: false,
 			think,
 			options: OllamaOptions {
-				temperature: request.temperature.unwrap_or(0.0),
+				temperature: 0.0,
 				num_predict: request.max_tokens,
 				stop: None,
 			},

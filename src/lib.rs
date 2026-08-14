@@ -14,7 +14,6 @@ impl Client {
 		Self {
 			config,
 			backend,
-			temperature: None,
 			max_tokens: None,
 			stop_sequences: None,
 			force_json: false,
@@ -25,11 +24,6 @@ impl Client {
 
 	pub fn model(mut self, model: Model) -> Self {
 		self.backend = model.into_backend(&self.config);
-		self
-	}
-
-	pub fn temperature(mut self, temperature: f32) -> Self {
-		self.temperature = Some(temperature);
 		self
 	}
 
@@ -81,7 +75,6 @@ impl Client {
 		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
 		let request = Request {
 			conversation: conv,
-			temperature: self.temperature,
 			max_tokens: self.max_tokens,
 			stop_sequences: stop_seqs,
 			force_json: self.force_json,
@@ -110,21 +103,21 @@ impl Model {
 				let api_key = claude_api_key(config);
 				Box::new(claude::Claude {
 					api_key,
-					model: claude::ClaudeModel::Haiku45,
+					model: claude::ClaudeModel::Sonnet5,
 				})
 			}
 			Model::Medium => {
 				let api_key = claude_api_key(config);
 				Box::new(claude::Claude {
 					api_key,
-					model: claude::ClaudeModel::Sonnet45,
+					model: claude::ClaudeModel::Opus5,
 				})
 			}
 			Model::Slow => {
 				let api_key = claude_api_key(config);
 				Box::new(claude::Claude {
 					api_key,
-					model: claude::ClaudeModel::Opus41,
+					model: claude::ClaudeModel::Fable5,
 				})
 			}
 			Model::DeepSeek => Box::new(deepseek::DeepSeek { api_key: deepseek_api_key(config) }),
@@ -319,7 +312,6 @@ pub struct FileAttachment {
 pub struct Client {
 	config: config::AppConfig,
 	backend: Box<dyn Backend>,
-	temperature: Option<f32>,
 	max_tokens: Option<usize>,
 	stop_sequences: Option<Vec<String>>,
 	force_json: bool,
@@ -346,7 +338,6 @@ fn deepseek_api_key(config: &config::AppConfig) -> String {
 
 pub(crate) struct Request<'a> {
 	pub conversation: &'a Conversation,
-	pub temperature: Option<f32>,
 	pub max_tokens: Option<usize>,
 	pub stop_sequences: Option<Vec<&'a str>>,
 	pub force_json: bool,
@@ -357,7 +348,6 @@ pub(crate) struct Request<'a> {
 impl std::fmt::Debug for Client {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		f.debug_struct("Client")
-			.field("temperature", &self.temperature)
 			.field("max_tokens", &self.max_tokens)
 			.field("stop_sequences", &self.stop_sequences)
 			.field("force_json", &self.force_json)

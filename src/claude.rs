@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 
 use crate::{Backend, Conversation, FileAttachment, Request, Response, Role, ThinkingLevel};
 
+/// `output_config.format` would demand a concrete schema, which this generic-JSON API can't supply
+const FORCE_JSON_SUFFIX: &str = "\n\nRespond with valid JSON only, no other text or markdown fences.";
 pub struct Cost {
 	pub million_input_tokens: f32,
 	pub million_output_tokens: f32,
@@ -46,7 +48,7 @@ impl Claude {
 		let mut headers = HeaderMap::new();
 		headers.insert("x-api-key", HeaderValue::from_str(&self.api_key).unwrap());
 		headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01")); // API standard edition, does not influence model versions
-		headers.insert("anthropic-beta", HeaderValue::from_static("output-128k-2025-02-19,structured-outputs-2025-11-13"));
+		headers.insert("anthropic-beta", HeaderValue::from_static("structured-outputs-2025-11-13"));
 		headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 		//,}}}
 
@@ -66,44 +68,36 @@ impl Claude {
 		};
 
 		// Payload {{{
-		let thinking_budget = match request.thinking {
-			ThinkingLevel::None => None,
-			ThinkingLevel::Low => Some(2_048),
-			ThinkingLevel::Medium => Some(8_192),
-			ThinkingLevel::High => Some(32_000),
-		};
-		// Claude requires temperature=1 when extended thinking is enabled
-		let temperature = match thinking_budget {
-			Some(_) => 1.0,
-			None => request.temperature.unwrap_or(0.0),
+		if request.force_json {
+			let last = conversation.messages.last_mut().expect("conversation is never empty");
+			match &mut last.content {
+				ClaudeMessageContent::Text(text) => text.push_str(FORCE_JSON_SUFFIX),
+				ClaudeMessageContent::ContentBlocks(blocks) => blocks.push(ClaudeContentBlock::Text {
+					text: FORCE_JSON_SUFFIX.to_string(),
+				}),
+			}
+		}
+
+		// `disabled` is rejected outright by fable, and above `high` effort by opus, so `None` omits the key instead.
+		let effort = match request.thinking {
+			ThinkingLevel::None | ThinkingLevel::Low => "low",
+			ThinkingLevel::Medium => "medium",
+			ThinkingLevel::High => "high",
 		};
 		let mut payload = json!({
 			"model": self.model.to_str(),
-			"temperature": temperature,
 			"max_tokens": max_tokens,
+			"output_config": {"effort": effort},
 			"messages": conversation.messages
 		});
-		if let Some(budget) = thinking_budget {
-			payload
-				.as_object_mut()
-				.unwrap()
-				.insert("thinking".to_string(), json!({"type": "enabled", "budget_tokens": budget}));
+		if !matches!(request.thinking, ThinkingLevel::None) {
+			payload.as_object_mut().unwrap().insert("thinking".to_string(), json!({"type": "adaptive"}));
 		}
 		if let Some(ref stop_seqs) = request.stop_sequences {
 			payload.as_object_mut().unwrap().insert("stop_sequences".to_string(), serde_json::json!(stop_seqs));
 		}
 		if let Some(system_message) = system_message {
 			payload.as_object_mut().unwrap().insert("system".to_string(), serde_json::json!(system_message));
-		}
-		if request.force_json {
-			// Use prefill approach - Claude's structured outputs require strict schemas with
-			// additionalProperties: false, which doesn't work for generic JSON responses.
-			// Prefill works universally across all models.
-			conversation.messages.push(ClaudeMessage {
-				role: "assistant",
-				content: ClaudeMessageContent::Text("{".to_string()),
-			});
-			payload.as_object_mut().unwrap().insert("messages".to_string(), serde_json::json!(conversation.messages));
 		}
 		//,}}}
 
@@ -122,11 +116,6 @@ impl Claude {
 			}
 		};
 
-		// Prepend the "{" we used for prefilling when force_json was enabled
-		if request.force_json {
-			response.text = format!("{{{}", response.text);
-		}
-
 		response.model = self.model.to_str().to_string();
 		response.thinking = request.thinking;
 		Ok(response)
@@ -142,43 +131,39 @@ impl Backend for Claude {
 #[derive(Debug, Eq, PartialEq)]
 /// ref: https://docs.claude.com/en/docs/about-claude/models/all-models
 pub(crate) enum ClaudeModel {
-	Haiku45,
-	Sonnet45,
-	Opus41,
+	Sonnet5,
+	Opus5,
+	Fable5,
 }
 impl ClaudeModel {
 	fn to_str(&self) -> &str {
 		match self {
-			ClaudeModel::Haiku45 => "claude-haiku-4-5",
-			ClaudeModel::Sonnet45 => "claude-sonnet-4-5",
-			ClaudeModel::Opus41 => "claude-opus-4-1",
+			ClaudeModel::Sonnet5 => "claude-sonnet-5",
+			ClaudeModel::Opus5 => "claude-opus-5",
+			ClaudeModel::Fable5 => "claude-fable-5",
 		}
 	}
 
 	///NB: could end up being outdated, as I freely use "-latest" marker in model defs
 	pub fn cost(&self) -> Cost {
 		match self {
-			Self::Haiku45 => Cost {
-				million_input_tokens: 1.0,
-				million_output_tokens: 5.0,
-			},
-			Self::Sonnet45 => Cost {
+			Self::Sonnet5 => Cost {
 				million_input_tokens: 3.0,
 				million_output_tokens: 15.0,
 			},
-			Self::Opus41 => Cost {
-				million_input_tokens: 15.0,
-				million_output_tokens: 75.0,
+			Self::Opus5 => Cost {
+				million_input_tokens: 5.0,
+				million_output_tokens: 25.0,
+			},
+			Self::Fable5 => Cost {
+				million_input_tokens: 10.0,
+				million_output_tokens: 50.0,
 			},
 		}
 	}
 
 	pub fn max_tokens(&self) -> usize {
-		match self {
-			Self::Haiku45 => 64_000,
-			Self::Sonnet45 => 64_000,
-			Self::Opus41 => 32_000,
-		}
+		128_000
 	}
 }
 impl std::str::FromStr for ClaudeModel {
@@ -186,9 +171,9 @@ impl std::str::FromStr for ClaudeModel {
 
 	fn from_str(s: &str) -> Result<Self> {
 		Ok(match s {
-			_ if s.to_lowercase().contains("haiku") => Self::Haiku45,
-			_ if s.to_lowercase().contains("sonnet") => Self::Sonnet45,
-			_ if s.to_lowercase().contains("opus") => Self::Opus41,
+			_ if s.to_lowercase().contains("sonnet") => Self::Sonnet5,
+			_ if s.to_lowercase().contains("opus") => Self::Opus5,
+			_ if s.to_lowercase().contains("fable") => Self::Fable5,
 			_ => bail!("Unknown model: {s}"),
 		})
 	}
@@ -345,6 +330,8 @@ fn file_to_content_block(file: &FileAttachment) -> ClaudeContentBlock {
 struct ClaudeContent {
 	#[serde(rename = "type")]
 	content_type: String,
+	/// absent on non-text blocks (`thinking` carries `thinking`+`signature` instead)
+	#[serde(default)]
 	text: String,
 }
 #[derive(Debug, Deserialize)]
@@ -374,9 +361,9 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 	let ttfb = ttfb_start.elapsed();
 
 	let mut accumulated_message = String::new();
+	let mut refused = false;
 
-	fn parse_sse(bytes: bytes::Bytes) -> String {
-		let s = String::from_utf8(bytes.to_vec()).expect("Found invalid UTF-8");
+	fn parse_sse(s: &str) -> String {
 		let mut parsed_string = String::new();
 
 		let split = s
@@ -386,7 +373,8 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 
 		for s in split {
 			if let Ok(v) = serde_json::from_str::<DeltaContentBlock>(&s)
-				&& (v.response_type == "content_block_delta" || v.delta.delta_type == "text_delta")
+				&& v.response_type == "content_block_delta"
+				&& v.delta.delta_type == "text_delta"
 			{
 				parsed_string.push_str(&v.delta.text);
 			}
@@ -394,12 +382,33 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 		parsed_string
 	}
 
+	/// only field we act on; `message_delta` carries the terminal stop_reason
+	#[derive(Deserialize)]
+	struct MessageDelta {
+		stop_reason: Option<String>,
+	}
+
 	while let Some(events_batch) = response_stream.next().await {
 		let events_batch = events_batch?;
+		let s = String::from_utf8(events_batch.to_vec()).expect("Found invalid UTF-8");
 
-		let parsed = parse_sse(events_batch);
+		for chunk in s.split("event: message_delta\ndata: ").skip(1) {
+			let data = chunk.split("\n\n").next().expect("split always yields one element");
+			if let Ok(d) = serde_json::from_str::<serde_json::Value>(data)
+				&& let Ok(delta) = serde_json::from_value::<MessageDelta>(d.get("delta").cloned().unwrap_or_default())
+				&& delta.stop_reason.as_deref() == Some("refusal")
+			{
+				refused = true;
+			}
+		}
+
+		let parsed = parse_sse(&s);
 		tracing::debug!(parsed);
 		accumulated_message.push_str(&parsed);
+	}
+
+	if refused {
+		bail!("Claude refused to process the request. This may be due to content policy restrictions.");
 	}
 
 	let estimated_tokens = accumulated_message.split_whitespace().count() as f32 * 0.7;
@@ -481,7 +490,7 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 mod tests {
 	#[test]
 	fn deser_model() {
-		let model = "claude-haiku-4-5-20251001".parse::<super::ClaudeModel>().unwrap();
-		assert_eq!(model, super::ClaudeModel::Haiku45);
+		let model = "claude-sonnet-5".parse::<super::ClaudeModel>().unwrap();
+		assert_eq!(model, super::ClaudeModel::Sonnet5);
 	}
 }

@@ -24,6 +24,20 @@
 - **New**: `config::AppConfig::deepseek_token`, falling back to the `DEEPSEEK_KEY` env var.
 - `ThinkingLevel` maps onto DeepSeek's `thinking` request param (`None` disables it explicitly, since the API enables thinking by default).
 
+## v3.0.0
+
+Anthropic backend rewritten against the current API — the previous request shape produced unconditional 400s on every live model.
+
+- **Breaking**: `Client::temperature()` removed. The parameter is rejected by every current Anthropic model, and the Ollama/DeepSeek backends now pin it to `0.0`.
+- **Breaking**: Claude tiers are now `Fast` → `claude-sonnet-5`, `Medium` → `claude-opus-5`, `Slow` → `claude-fable-5`. `claude-opus-4-1` was retired 2026-08-05, so `Model::Slow` had been 404ing.
+- Haiku 4.5 dropped: it rejects both `adaptive` thinking and `output_config.effort`, so keeping it would force a second request shape.
+- `ThinkingLevel` maps onto `output_config.effort` (`low`/`low`/`medium`/`high`), with `thinking: {"type": "adaptive"}` for everything but `None`. `budget_tokens` is gone. `None` omits the `thinking` key rather than sending `{"type": "disabled"}`, which Fable rejects outright and Opus rejects above `high` effort.
+- `force_json` appends an instruction to the last user message instead of prefilling an assistant turn (prefill is a 400 on all current models).
+- Fix: streamed `thinking_delta` chunks could be concatenated into `Response::text`.
+- Fix: `thinking` content blocks have no `text` field, which broke deserialization of the whole non-streamed response.
+- `stop_reason: "refusal"` is now surfaced as an error on the streaming path too, not just the REST one.
+- `max_tokens` ceiling raised to 128k on all three tiers; dropped the no-op `output-128k-2025-02-19` beta header.
+
 ---
 
 ## v2.1.x and earlier
