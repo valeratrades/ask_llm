@@ -222,7 +222,9 @@ impl Response {
 
 pub mod config;
 mod shortcuts;
+mod transcribe;
 pub use shortcuts::*;
+pub use transcribe::transcribe;
 
 #[derive(Debug)]
 pub struct Response {

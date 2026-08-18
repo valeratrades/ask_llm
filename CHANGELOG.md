@@ -49,6 +49,8 @@ Anthropic backend rewritten against the current API — the previous request sha
 - **Breaking**: `Model` is `#[non_exhaustive]`.
 - `Model::Fast` needs `DEEPSEEK_KEY` (or `config.deepseek_token`) instead of `CLAUDE_TOKEN`, and drops file/image support — the DeepSeek backend is text-only.
 - Not published: the account 402s on every call until it is funded.
+- **New**: `transcribe(path)` — speech to text, run locally through `whisper-cli`. The first capability here that reaches no provider, so it has no key, no balance and no rate limit; it sits outside `Client`/`Model` because it is audio-in/text-out rather than a conversation. Takes any format ffmpeg decodes, model from `$WHISPER_MODEL` or the whisper-cpp data dir.
+- **New**: `ask_llm --transcribe <AUDIO>` on the CLI. `QUESTION` became optional to allow it, and is still required without the flag.
 
 ---
 
