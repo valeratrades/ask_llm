@@ -223,6 +223,7 @@ impl Response {
 pub mod config;
 mod shortcuts;
 mod transcribe;
+pub mod tts;
 pub use shortcuts::*;
 pub use transcribe::transcribe;
 
