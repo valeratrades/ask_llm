@@ -45,6 +45,10 @@ Anthropic backend rewritten against the current API — the previous request sha
 
 ## Unreleased
 
+- **Refactor**: what the four backends had each copied now lives once in `lib.rs` — `Cost` (declared twice, imported across a module boundary a third time) plus a `cents()` that owns the per-1M-to-cents arithmetic, `Role → &'static str`, the `force_json` prompt suffix, the 128k `max_tokens` ceiling, and `json_response`, which does the non-2xx-bail / debug-dump / deserialize sequence for every backend. Net −65 lines.
+- **Fix**: the Anthropic streaming path divided by `1_000_000` where the field is cents, so every streamed response under-reported its cost 100×. Only the rest path was right; both go through `Cost::cents` now.
+- `ClaudeModel::max_tokens`/`OpenAiModel::max_tokens` are gone. Both ignored `self` and returned the same constant, so the per-model shape was fiction; reintroduce a method when a model actually differs.
+- Deepseek and Ollama now send the same `force_json` suffix as the others, which additionally names markdown fences.
 - **New**: `openai` backend module, hitting `https://api.openai.com/v1/chat/completions` with the three GPT-5.6 tiers (`sol`/`terra`/`luna`). Only `terra` and `luna` are reachable through `Model`; `Sol` exists so a response can still be priced if one comes back.
 - **Breaking**: `Model::Fast` → `gpt-5.6-luna` and `Model::Medium` → `gpt-5.6-terra`. `Medium` and `Slow` had both resolved to `claude-opus-5`, so the ladder had no middle rung. Both tiers now need `OPENAI_API_KEY` (or `config.openai_token`).
 - **New**: `config::AppConfig::openai_token`.

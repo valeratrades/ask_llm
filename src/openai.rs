@@ -2,11 +2,9 @@ use std::str::FromStr as _;
 
 use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::{Backend, ContentPart, FileAttachment, MessageContent, Request, Response, Role, ThinkingLevel, claude::Cost};
-
-const FORCE_JSON_SUFFIX: &str = "\n\nRespond with valid JSON only, no other text.";
+use crate::{Backend, ContentPart, Cost, FORCE_JSON_SUFFIX, FileAttachment, MAX_TOKENS, MessageContent, Request, Response, ThinkingLevel};
 
 pub(crate) struct OpenAi {
 	pub api_key: String,
@@ -20,11 +18,7 @@ impl OpenAi {
 			.0
 			.iter()
 			.map(|message| OpenAiMessage {
-				role: match message.role {
-					Role::System => "system",
-					Role::User => "user",
-					Role::Assistant => "assistant",
-				},
+				role: message.role.into(),
 				content: (&message.content).into(),
 			})
 			.collect();
@@ -53,10 +47,7 @@ impl OpenAi {
 			ThinkingLevel::Medium => "medium",
 			ThinkingLevel::High => "high",
 		};
-		let max_tokens = match request.max_tokens {
-			Some(max_tokens) => max_tokens.min(self.model.max_tokens()),
-			_ => self.model.max_tokens(),
-		};
+		let max_tokens = request.max_tokens.unwrap_or(MAX_TOKENS).min(MAX_TOKENS);
 
 		// `max_tokens` and `temperature` are both rejected by the reasoning models
 		let mut payload = json!({
@@ -79,21 +70,7 @@ impl OpenAi {
 			.send()
 			.await?;
 		let ttfb = ttfb_start.elapsed();
-
-		let status = http_response.status();
-		if !status.is_success() {
-			let body = http_response.text().await.unwrap_or_default();
-			bail!("OpenAI request failed ({status}): {body}");
-		}
-
-		let value: Value = http_response.json().await?;
-		tracing::debug!(?value);
-		let parsed: OpenAiResponse = serde_json::from_value(value.clone()).inspect_err(|e| {
-			eprintln!(
-				"Failed to parse OpenAI response: {}\n{e:?}",
-				serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
-			);
-		})?;
+		let parsed: OpenAiResponse = crate::json_response(http_response, "OpenAI").await?;
 
 		let choice = match parsed.choices.into_iter().next() {
 			Some(choice) => choice,
@@ -111,12 +88,9 @@ impl OpenAi {
 			text.truncate(cut);
 		}
 
-		let cost = OpenAiModel::from_str(&parsed.model)?.cost();
-		let cost_cents = (parsed.usage.prompt_tokens as f32 * cost.million_input_tokens + parsed.usage.completion_tokens as f32 * cost.million_output_tokens) / 10_000.0;
-
 		Ok(Response {
 			text,
-			cost_cents,
+			cost_cents: OpenAiModel::from_str(&parsed.model)?.cost().cents(parsed.usage.prompt_tokens, parsed.usage.completion_tokens),
 			duration: std::time::Duration::ZERO,
 			overhead: ttfb,
 			model: parsed.model,
@@ -162,10 +136,6 @@ impl OpenAiModel {
 				million_output_tokens: 1.2,
 			},
 		}
-	}
-
-	pub fn max_tokens(&self) -> usize {
-		128_000
 	}
 }
 impl std::str::FromStr for OpenAiModel {

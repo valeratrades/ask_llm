@@ -248,6 +248,10 @@ pub mod tts;
 pub use shortcuts::*;
 pub use transcribe::transcribe;
 
+/// Every remote model currently offered by every provider here caps out at the same place.
+pub(crate) const MAX_TOKENS: usize = 128_000;
+/// Fences are mentioned because the models otherwise wrap the object in them even when told to emit json only.
+pub(crate) const FORCE_JSON_SUFFIX: &str = "\n\nRespond with valid JSON only, no other text or markdown fences.";
 #[derive(Debug)]
 pub struct Response {
 	pub text: String,
@@ -338,6 +342,44 @@ pub struct Client {
 }
 pub(crate) trait Backend: Send + Sync {
 	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
+}
+
+/// Per-1M-token rates, as every provider quotes them.
+pub(crate) struct Cost {
+	pub million_input_tokens: f32,
+	pub million_output_tokens: f32,
+}
+impl Cost {
+	pub fn cents(&self, input_tokens: u32, output_tokens: u32) -> f32 {
+		(input_tokens as f32 * self.million_input_tokens + output_tokens as f32 * self.million_output_tokens) / 10_000.0
+	}
+}
+
+impl From<Role> for &'static str {
+	fn from(role: Role) -> Self {
+		match role {
+			Role::System => "system",
+			Role::User => "user",
+			Role::Assistant => "assistant",
+		}
+	}
+}
+
+/// The body carries the provider's explanation of a rejection, which `error_for_status` throws away, and the raw
+/// json is logged before deserializing so that a schema drift is legible rather than a bare serde path.
+pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqwest::Response, provider: &str) -> Result<T> {
+	let status = response.status();
+	if !status.is_success() {
+		bail!("{provider} request failed ({status}): {}", response.text().await?);
+	}
+	let value: serde_json::Value = response.json().await?;
+	tracing::debug!(?value);
+	serde_json::from_value(value.clone()).map_err(|e| {
+		eyre::eyre!(
+			"failed to parse {provider} response: {e}\n{}",
+			serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
+		)
+	})
 }
 fn claude_api_key(config: &config::AppConfig, model: &'static str) -> Result<String, MissingToken> {
 	config

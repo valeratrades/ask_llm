@@ -1,8 +1,8 @@
 use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::{Backend, Request, Response, Role, ThinkingLevel};
+use crate::{Backend, Cost, FORCE_JSON_SUFFIX, Request, Response, ThinkingLevel};
 
 /// `deepseek-chat`/`deepseek-reasoner` were discontinued 2026-07-24, thinking is now a request param instead of a model
 const MODEL: &str = "deepseek-v4-flash";
@@ -11,10 +11,6 @@ const COST: Cost = Cost {
 	million_input_tokens: 0.14,
 	million_output_tokens: 0.28,
 };
-pub struct Cost {
-	pub million_input_tokens: f32,
-	pub million_output_tokens: f32,
-}
 
 pub(crate) struct DeepSeek {
 	pub api_key: String,
@@ -28,17 +24,12 @@ impl DeepSeek {
 
 		let mut messages: Vec<DeepSeekMessage> = Vec::new();
 		for message in &request.conversation.0 {
-			let role = match message.role {
-				Role::System => "system",
-				Role::User => "user",
-				Role::Assistant => "assistant",
-			};
 			let text = match &message.content {
 				crate::MessageContent::Text(t) => t.clone(),
 				_ => bail!("DeepSeek backend only supports text messages"),
 			};
 			messages.push(DeepSeekMessage {
-				role: role.to_string(),
+				role: <&str>::from(message.role).to_string(),
 				content: text,
 			});
 		}
@@ -46,7 +37,7 @@ impl DeepSeek {
 		if request.force_json {
 			// json_object mode returns empty content unless the prompt itself asks for json
 			let last = messages.last_mut().expect("conversation is never empty");
-			last.content.push_str("\n\nRespond with valid JSON only, no other text.");
+			last.content.push_str(FORCE_JSON_SUFFIX);
 		}
 
 		// thinking is on by default server-side, so `None` has to disable it explicitly
@@ -87,21 +78,7 @@ impl DeepSeek {
 			.send()
 			.await?;
 		let ttfb = ttfb_start.elapsed();
-
-		let status = http_response.status();
-		if !status.is_success() {
-			let body = http_response.text().await.unwrap_or_default();
-			bail!("DeepSeek request failed ({status}): {body}");
-		}
-
-		let value: Value = http_response.json().await?;
-		tracing::debug!(?value);
-		let parsed: DeepSeekResponse = serde_json::from_value(value.clone()).inspect_err(|e| {
-			eprintln!(
-				"Failed to parse DeepSeek response: {}\n{e:?}",
-				serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
-			);
-		})?;
+		let parsed: DeepSeekResponse = crate::json_response(http_response, "DeepSeek").await?;
 
 		let choice = match parsed.choices.into_iter().next() {
 			Some(choice) => choice,
@@ -111,11 +88,9 @@ impl DeepSeek {
 			bail!("DeepSeek refused to process the request. This may be due to content policy restrictions.");
 		}
 
-		let cost_cents = (parsed.usage.prompt_tokens as f32 * COST.million_input_tokens + parsed.usage.completion_tokens as f32 * COST.million_output_tokens) / 10_000.0;
-
 		Ok(Response {
 			text: choice.message.content,
-			cost_cents,
+			cost_cents: COST.cents(parsed.usage.prompt_tokens, parsed.usage.completion_tokens),
 			duration: std::time::Duration::ZERO,
 			overhead: ttfb,
 			model: MODEL.to_string(),

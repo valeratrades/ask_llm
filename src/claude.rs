@@ -4,17 +4,10 @@ use eyre::{Result, bail};
 use futures::stream::StreamExt;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
-use crate::{Backend, Conversation, FileAttachment, Request, Response, Role, ThinkingLevel};
+use crate::{Backend, Conversation, Cost, FORCE_JSON_SUFFIX, FileAttachment, MAX_TOKENS, Request, Response, ThinkingLevel};
 
-/// `output_config.format` would demand a concrete schema, which this generic-JSON API can't supply
-const FORCE_JSON_SUFFIX: &str = "\n\nRespond with valid JSON only, no other text or markdown fences.";
-
-pub struct Cost {
-	pub million_input_tokens: f32,
-	pub million_output_tokens: f32,
-}
 /// Thinking is billed against `max_tokens` and can consume all of it, leaving zero text behind.
 /// Silently handing back an empty string reads as "the model had nothing to say", so error instead.
 fn starved(stop_reason: Option<&str>, text: &str) -> Result<()> {
@@ -71,10 +64,7 @@ impl Claude {
 			false => None,
 		};
 
-		let max_tokens = match request.max_tokens {
-			Some(max_tokens) => max_tokens.min(self.model.max_tokens()),
-			_ => self.model.max_tokens(),
-		};
+		let max_tokens = request.max_tokens.unwrap_or(MAX_TOKENS).min(MAX_TOKENS);
 
 		// Payload {{{
 		if request.force_json {
@@ -170,10 +160,6 @@ impl ClaudeModel {
 			},
 		}
 	}
-
-	pub fn max_tokens(&self) -> usize {
-		128_000
-	}
 }
 impl std::str::FromStr for ClaudeModel {
 	type Err = eyre::Report;
@@ -236,12 +222,6 @@ impl From<&Conversation> for ClaudeConversation {
 		use crate::{ContentPart, MessageContent};
 		let mut messages = Vec::new();
 		for message in &conversation.0 {
-			let role = match message.role {
-				Role::System => "system",
-				Role::User => "user",
-				Role::Assistant => "assistant",
-			};
-
 			let content = match &message.content {
 				MessageContent::Text(text) => ClaudeMessageContent::Text(text.clone()),
 				MessageContent::Image { base64_data, media_type } => ClaudeMessageContent::ContentBlocks(vec![ClaudeContentBlock::Image {
@@ -296,7 +276,7 @@ impl From<&Conversation> for ClaudeConversation {
 				}
 			};
 
-			messages.push(ClaudeMessage { role, content });
+			messages.push(ClaudeMessage { role: message.role.into(), content });
 		}
 		Self { messages }
 	}
@@ -429,10 +409,9 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 	starved(stop_reason.as_deref(), &accumulated_message)?;
 
 	let estimated_tokens = accumulated_message.split_whitespace().count() as f32 * 0.7;
-	let cost = (model.cost().million_output_tokens * estimated_tokens) / 1_000_000.0;
 	Ok(Response {
+		cost_cents: model.cost().cents(0, estimated_tokens as u32),
 		text: accumulated_message,
-		cost_cents: cost,
 		duration: std::time::Duration::ZERO,
 		overhead: ttfb,
 		model: String::new(),
@@ -444,20 +423,8 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 // rest_g {{{
 async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 	let ttfb_start = std::time::Instant::now();
-	let http_response = request_builder.send().await?;
-	let status = http_response.status();
-	if !status.is_success() {
-		bail!("Claude request failed ({status}): {}", http_response.text().await?);
-	}
-	let value = http_response.json::<Value>().await?;
+	let response: ClaudeResponse = crate::json_response(request_builder.send().await?, "Claude").await?;
 	let ttfb = ttfb_start.elapsed();
-	tracing::debug!(?value);
-	let response = serde_json::from_value::<ClaudeResponse>(value.clone()).inspect_err(|e| {
-		eprintln!(
-			"Failed to parse Claude response. Response JSON: {}\n{e:?}",
-			serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value))
-		);
-	})?;
 
 	// Check for refusal
 	if response.stop_reason == "refusal" {
@@ -489,9 +456,7 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 		}
 
 		pub fn cost_cents(&self) -> f32 {
-			let model = ClaudeModel::from_str(&self.model).unwrap();
-			let cost = model.cost();
-			(self.usage.input_tokens as f32 * cost.million_input_tokens + self.usage.output_tokens as f32 * cost.million_output_tokens) / 10_000.0
+			ClaudeModel::from_str(&self.model).unwrap().cost().cents(self.usage.input_tokens, self.usage.output_tokens)
 		}
 	}
 	impl From<ClaudeResponse> for Response {

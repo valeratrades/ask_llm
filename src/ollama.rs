@@ -1,7 +1,7 @@
 use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::{Backend, Request, Response, Role, ThinkingLevel};
+use crate::{Backend, FORCE_JSON_SUFFIX, Request, Response, ThinkingLevel};
 
 pub(crate) struct Ollama {
 	pub model: String,
@@ -16,27 +16,21 @@ impl Ollama {
 		let mut messages: Vec<OllamaMessage> = Vec::new();
 
 		for message in &request.conversation.0 {
-			let role = match message.role {
-				Role::System => "system",
-				Role::User => "user",
-				Role::Assistant => "assistant",
-			};
 			let text = match &message.content {
 				crate::MessageContent::Text(t) => t.clone(),
 				_ => bail!("Ollama backend only supports text messages"),
 			};
 			messages.push(OllamaMessage {
-				role: role.to_string(),
+				role: <&str>::from(message.role).to_string(),
 				content: text,
 			});
 		}
 
-		if request.force_json {
-			if let Some(last) = messages.last_mut() {
-				if last.role == "user" {
-					last.content.push_str("\n\nRespond with valid JSON only, no other text.");
-				}
-			}
+		if request.force_json
+			&& let Some(last) = messages.last_mut()
+			&& last.role == "user"
+		{
+			last.content.push_str(FORCE_JSON_SUFFIX);
 		}
 
 		let think = !matches!(request.thinking, ThinkingLevel::None);
@@ -58,22 +52,7 @@ impl Ollama {
 		}
 
 		let response = reqwest::Client::new().post(&self.url).json(&ollama_request).send().await?;
-
-		let status = response.status();
-		if !status.is_success() {
-			let body = response.text().await.unwrap_or_default();
-			bail!("Ollama request failed ({status}): {body}");
-		}
-
-		let value: serde_json::Value = response.json().await?;
-		tracing::debug!(?value);
-
-		let parsed: OllamaResponse = serde_json::from_value(value.clone()).inspect_err(|e| {
-			eprintln!(
-				"Failed to parse Ollama response: {}\n{e:?}",
-				serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{:?}", value))
-			);
-		})?;
+		let parsed: OllamaResponse = crate::json_response(response, "Ollama").await?;
 
 		let overhead_nanos = parsed.load_duration + parsed.prompt_eval_duration;
 		Ok(Response {
