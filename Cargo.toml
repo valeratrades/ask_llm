@@ -9,6 +9,7 @@ homepage = "https://github.com/valeratrades/ask_llm"
 repository = "https://github.com/valeratrades/ask_llm"
 readme = "README.md"
 edition = "2024"
+include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md", ".cargo/*", "build.rs"]
 
 [package.metadata.docs.rs]
 cargo-args = ["-Zunstable-options", "-Zrustdoc-scrape-examples"]
