@@ -347,12 +347,31 @@ pub(crate) trait Backend: Send + Sync {
 /// Per-1M-token rates, as every provider quotes them.
 pub(crate) struct Cost {
 	pub million_input_tokens: f32,
+	/// Input served from a cached prefix, which every provider here discounts to a tenth.
+	pub million_cached_input_tokens: f32,
+	/// Input written into the cache. Zero where the provider charges nothing for the write.
+	pub million_cache_write_tokens: f32,
 	pub million_output_tokens: f32,
 }
 impl Cost {
-	pub fn cents(&self, input_tokens: u32, output_tokens: u32) -> f32 {
-		(input_tokens as f32 * self.million_input_tokens + output_tokens as f32 * self.million_output_tokens) / 10_000.0
+	pub fn cents(&self, usage: Usage) -> f32 {
+		(usage.input as f32 * self.million_input_tokens
+			+ usage.cached_input as f32 * self.million_cached_input_tokens
+			+ usage.cache_write as f32 * self.million_cache_write_tokens
+			+ usage.output as f32 * self.million_output_tokens)
+			/ 10_000.0
 	}
+}
+
+/// Token counts lifted out of a provider's usage block. Providers disagree on whether the cache tiers are a
+/// breakdown of the input count or additional to it, so each backend resolves its own before filling this in.
+#[derive(Debug, Default)]
+pub(crate) struct Usage {
+	/// Billed at full rate: neither served from cache nor written to it.
+	pub input: u32,
+	pub cached_input: u32,
+	pub cache_write: u32,
+	pub output: u32,
 }
 
 impl From<Role> for &'static str {
@@ -373,7 +392,7 @@ pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqw
 		bail!("{provider} request failed ({status}): {}", response.text().await?);
 	}
 	let value: serde_json::Value = response.json().await?;
-	tracing::debug!(?value);
+	tracing::debug!(provider, ?value);
 	serde_json::from_value(value.clone()).map_err(|e| {
 		eyre::eyre!(
 			"failed to parse {provider} response: {e}\n{}",

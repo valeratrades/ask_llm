@@ -90,7 +90,7 @@ impl OpenAi {
 
 		Ok(Response {
 			text,
-			cost_cents: OpenAiModel::from_str(&parsed.model)?.cost().cents(parsed.usage.prompt_tokens, parsed.usage.completion_tokens),
+			cost_cents: OpenAiModel::from_str(&parsed.model)?.cost().cents(parsed.usage.into()),
 			duration: std::time::Duration::ZERO,
 			overhead: ttfb,
 			model: parsed.model,
@@ -121,18 +121,26 @@ impl OpenAiModel {
 		}
 	}
 
+	/// Short-context rates, ref: https://developers.openai.com/api/docs/pricing
 	pub fn cost(&self) -> Cost {
 		match self {
+			// listed as promotional "at least through" 2026-11-21 — a floor on the discount, not an expiry. Was 5.0/30.0 before 2026-08-21.
 			Self::Sol => Cost {
-				million_input_tokens: 4.0, // promotional through 2026-11-21, after which it's 5.0/30.0
+				million_input_tokens: 4.0,
+				million_cached_input_tokens: 0.4,
+				million_cache_write_tokens: 5.0,
 				million_output_tokens: 20.0,
 			},
 			Self::Terra => Cost {
 				million_input_tokens: 2.0,
+				million_cached_input_tokens: 0.2,
+				million_cache_write_tokens: 2.5,
 				million_output_tokens: 12.0,
 			},
 			Self::Luna => Cost {
 				million_input_tokens: 0.2,
+				million_cached_input_tokens: 0.02,
+				million_cache_write_tokens: 0.25,
 				million_output_tokens: 1.2,
 			},
 		}
@@ -267,6 +275,33 @@ struct OpenAiChoice {
 struct OpenAiUsage {
 	prompt_tokens: u32,
 	completion_tokens: u32,
+	/// absent from openai-compatible gateways, which report only the totals
+	#[serde(default)]
+	prompt_tokens_details: OpenAiPromptDetails,
+}
+
+/// A breakdown of `prompt_tokens`, not an addition to it.
+#[derive(Debug, Default, Deserialize)]
+struct OpenAiPromptDetails {
+	#[serde(default)]
+	cached_tokens: u32,
+	#[serde(default)]
+	cache_write_tokens: u32,
+}
+impl From<OpenAiUsage> for crate::Usage {
+	fn from(usage: OpenAiUsage) -> Self {
+		let cached = usage.prompt_tokens_details.cached_tokens;
+		let written = usage.prompt_tokens_details.cache_write_tokens;
+		Self {
+			input: usage
+				.prompt_tokens
+				.checked_sub(cached + written)
+				.expect("cached and written tokens are a breakdown of prompt_tokens, not an addition to it"),
+			cached_input: cached,
+			cache_write: written,
+			output: usage.completion_tokens,
+		}
+	}
 }
 
 #[derive(Debug, Deserialize)]

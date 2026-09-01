@@ -144,18 +144,26 @@ impl ClaudeModel {
 	}
 
 	///NB: could end up being outdated, as I freely use "-latest" marker in model defs
+	/// Cache reads are 0.1x base input and 5-minute writes 1.25x, uniformly across the lineup.
+	/// The 1-hour TTL bills writes at 2x instead, and is unreachable while no request sets `cache_control`.
 	pub fn cost(&self) -> Cost {
 		match self {
 			Self::Sonnet5 => Cost {
 				million_input_tokens: 3.0,
+				million_cached_input_tokens: 0.3,
+				million_cache_write_tokens: 3.75,
 				million_output_tokens: 15.0,
 			},
 			Self::Opus5 => Cost {
 				million_input_tokens: 5.0,
+				million_cached_input_tokens: 0.5,
+				million_cache_write_tokens: 6.25,
 				million_output_tokens: 25.0,
 			},
 			Self::Fable5 => Cost {
 				million_input_tokens: 10.0,
+				million_cached_input_tokens: 1.0,
+				million_cache_write_tokens: 12.5,
 				million_output_tokens: 50.0,
 			},
 		}
@@ -324,9 +332,37 @@ struct ClaudeContent {
 	text: String,
 }
 #[derive(Debug, Deserialize)]
+/// `input_tokens` counts only what follows the last cache breakpoint, so the cache tiers add to it rather than divide it.
 struct ClaudeUsage {
 	input_tokens: u32,
 	output_tokens: u32,
+	#[serde(default)]
+	cache_read_input_tokens: u32,
+	#[serde(default)]
+	cache_creation_input_tokens: u32,
+	#[serde(default)]
+	cache_creation: ClaudeCacheCreation,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ClaudeCacheCreation {
+	#[serde(default)]
+	ephemeral_1h_input_tokens: u32,
+}
+impl From<&ClaudeUsage> for crate::Usage {
+	fn from(usage: &ClaudeUsage) -> Self {
+		// reachable only once something sets `cache_control`, at which point the 2x rate has to be priced rather than folded into the 1.25x one
+		assert_eq!(
+			usage.cache_creation.ephemeral_1h_input_tokens, 0,
+			"a 1-hour cache write bills at 2x base input, which `Cost` cannot express"
+		);
+		Self {
+			input: usage.input_tokens,
+			cached_input: usage.cache_read_input_tokens,
+			cache_write: usage.cache_creation_input_tokens,
+			output: usage.output_tokens,
+		}
+	}
 }
 
 // stream {{{
@@ -410,7 +446,10 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 
 	let estimated_tokens = accumulated_message.split_whitespace().count() as f32 * 0.7;
 	Ok(Response {
-		cost_cents: model.cost().cents(0, estimated_tokens as u32),
+		cost_cents: model.cost().cents(crate::Usage {
+			output: estimated_tokens as u32,
+			..Default::default()
+		}),
 		text: accumulated_message,
 		duration: std::time::Duration::ZERO,
 		overhead: ttfb,
@@ -456,7 +495,7 @@ async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 		}
 
 		pub fn cost_cents(&self) -> f32 {
-			ClaudeModel::from_str(&self.model).unwrap().cost().cents(self.usage.input_tokens, self.usage.output_tokens)
+			ClaudeModel::from_str(&self.model).unwrap().cost().cents((&self.usage).into())
 		}
 	}
 	impl From<ClaudeResponse> for Response {
