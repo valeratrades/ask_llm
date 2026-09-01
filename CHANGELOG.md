@@ -45,6 +45,16 @@ Anthropic backend rewritten against the current API — the previous request sha
 
 ## Unreleased
 
+- **New**: `openai` backend module, hitting `https://api.openai.com/v1/chat/completions` with the three GPT-5.6 tiers (`sol`/`terra`/`luna`). Only `terra` and `luna` are reachable through `Model`; `Sol` exists so a response can still be priced if one comes back.
+- **Breaking**: `Model::Fast` → `gpt-5.6-luna` and `Model::Medium` → `gpt-5.6-terra`. `Medium` and `Slow` had both resolved to `claude-opus-5`, so the ladder had no middle rung. Both tiers now need `OPENAI_API_KEY` (or `config.openai_token`).
+- **New**: `config::AppConfig::openai_token`.
+- `Model::Fast` regains file/image support, walking back the note under v3.1.0 — file attachments go up as data URIs (`image_url` for images, `file` for PDFs, decoded text for everything else).
+- `Client::stop_sequences` is applied to the returned text rather than the request: gpt-5.6 rejects the `stop` param outright. Output is the same, but generation past the cut is still billed.
+- `ThinkingLevel` maps onto the flat `reasoning_effort` param (`none`/`low`/`medium`/`high`). The `xhigh`/`max` efforts and `reasoning.mode: "pro"` are unreachable — `ThinkingLevel` can't express either.
+- The DeepSeek backend is kept but unreachable, so it builds with dead-code warnings.
+
+## v3.1.0
+
 - **Breaking**: `Model::DeepSeek` is gone. A provider is not a tier — `Model::Fast` now points at `deepseek-v4-flash`, so DeepSeek is reached by asking for the cheap remote tier rather than by naming it.
 - **Breaking**: `Model` is `#[non_exhaustive]`.
 - `Model::Fast` needs `DEEPSEEK_KEY` (or `config.deepseek_token`) instead of `CLAUDE_TOKEN`, and drops file/image support — the DeepSeek backend is text-only.

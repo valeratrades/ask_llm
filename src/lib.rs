@@ -6,6 +6,7 @@ use eyre::{Result, bail};
 mod claude;
 mod deepseek;
 mod ollama;
+mod openai;
 
 impl Client {
 	/// Create a new client using default config (reads from environment).
@@ -99,15 +100,22 @@ impl Model {
 				model: "translategemma:4b".to_string(),
 				url: "http://localhost:11434/api/chat".to_string(),
 			}),
-			Model::Fast => Box::new(deepseek::DeepSeek { api_key: deepseek_api_key(config) }),
-			Model::Medium => {
+			Model::Fast => Box::new(openai::OpenAi {
+				api_key: openai_api_key(config),
+				model: openai::OpenAiModel::Luna,
+			}),
+			Model::Medium => Box::new(openai::OpenAi {
+				api_key: openai_api_key(config),
+				model: openai::OpenAiModel::Terra,
+			}),
+			Model::Slow => {
 				let api_key = claude_api_key(config);
 				Box::new(claude::Claude {
 					api_key,
 					model: claude::ClaudeModel::Opus5,
 				})
 			}
-			Model::Slow => {
+			Model::PriceInsensitive => {
 				let api_key = claude_api_key(config);
 				Box::new(claude::Claude {
 					api_key,
@@ -292,6 +300,7 @@ pub enum Model {
 	#[default]
 	Medium,
 	Slow,
+	PriceInsensitive,
 	Cheap,
 	Translate,
 }
@@ -330,6 +339,13 @@ fn deepseek_api_key(config: &config::AppConfig) -> String {
 		.clone()
 		.or_else(|| std::env::var("DEEPSEEK_KEY").ok())
 		.expect("DEEPSEEK_KEY not set in config or environment")
+}
+fn openai_api_key(config: &config::AppConfig) -> String {
+	config
+		.openai_token
+		.clone()
+		.or_else(|| std::env::var("OPENAI_API_KEY").ok())
+		.expect("OPENAI_API_KEY not set in config or environment")
 }
 
 pub(crate) struct Request<'a> {

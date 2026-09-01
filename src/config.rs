@@ -7,4 +7,5 @@ use v_utils::macros::Settings;
 pub struct AppConfig {
 	pub claude_token: Option<String>,
 	pub deepseek_token: Option<String>,
+	pub openai_token: Option<String>,
 }
