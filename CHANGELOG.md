@@ -52,6 +52,9 @@ Anthropic backend rewritten against the current API — the previous request sha
 - `Client::stop_sequences` is applied to the returned text rather than the request: gpt-5.6 rejects the `stop` param outright. Output is the same, but generation past the cut is still billed.
 - `ThinkingLevel` maps onto the flat `reasoning_effort` param (`none`/`low`/`medium`/`high`). The `xhigh`/`max` efforts and `reasoning.mode: "pro"` are unreachable — `ThinkingLevel` can't express either.
 - The DeepSeek backend is kept but unreachable, so it builds with dead-code warnings.
+- **Breaking**: a model whose provider has no key no longer panics. Key resolution moved off `Client::new`/`Client::model` and onto the request, and reports [`MissingToken`] — a `thiserror` + `miette` diagnostic naming the provider, the model that wanted it, and the three places the key can come from.
+- **New**: `Client::claude_token`/`deepseek_token`/`openai_token` builders, so a consumer hands over keys for the providers it plans to use instead of assembling an `AppConfig`.
+- **Fix**: the Anthropic backend never looked at the HTTP status. A rejected key returned `Ok` with an empty string — an invalid key was indistinguishable from a model with nothing to say. Both the streaming and rest paths now fail on non-2xx, as the OpenAI and Ollama backends already did.
 
 ## v3.1.0
 

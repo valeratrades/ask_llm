@@ -5,16 +5,17 @@ use eyre::{Result, bail};
 
 mod claude;
 mod deepseek;
+mod error;
 mod ollama;
 mod openai;
+pub use error::MissingToken;
 
 impl Client {
-	/// Create a new client using default config (reads from environment).
+	/// Keys absent from `config` are looked up in the environment when the request is made.
 	pub fn new(config: config::AppConfig) -> Self {
-		let backend = Model::default().into_backend(&config);
 		Self {
 			config,
-			backend,
+			model: Model::default(),
 			max_tokens: None,
 			stop_sequences: None,
 			force_json: false,
@@ -24,7 +25,22 @@ impl Client {
 	}
 
 	pub fn model(mut self, model: Model) -> Self {
-		self.backend = model.into_backend(&self.config);
+		self.model = model;
+		self
+	}
+
+	pub fn claude_token(mut self, token: impl Into<String>) -> Self {
+		self.config.claude_token = Some(token.into());
+		self
+	}
+
+	pub fn deepseek_token(mut self, token: impl Into<String>) -> Self {
+		self.config.deepseek_token = Some(token.into());
+		self
+	}
+
+	pub fn openai_token(mut self, token: impl Into<String>) -> Self {
+		self.config.openai_token = Some(token.into());
 		self
 	}
 
@@ -82,16 +98,19 @@ impl Client {
 			files: &self.files,
 			thinking: self.thinking,
 		};
+		let backend = self.model.into_backend(&self.config)?;
 		let start = std::time::Instant::now();
-		let mut response = self.backend.conversation(&request).await?;
+		let mut response = backend.conversation(&request).await?;
 		response.duration = start.elapsed();
 		Ok(response)
 	}
 }
 
 impl Model {
-	fn into_backend(self, config: &config::AppConfig) -> Box<dyn Backend> {
-		match self {
+	/// Resolved per request rather than at construction, so a key that is missing for *this* model
+	/// surfaces as [`MissingToken`] on the call that needs it.
+	fn into_backend(self, config: &config::AppConfig) -> Result<Box<dyn Backend>, MissingToken> {
+		Ok(match self {
 			Model::Cheap => Box::new(ollama::Ollama {
 				model: "qwen3.5:4b".to_string(),
 				url: "http://localhost:11434/api/chat".to_string(),
@@ -101,28 +120,22 @@ impl Model {
 				url: "http://localhost:11434/api/chat".to_string(),
 			}),
 			Model::Fast => Box::new(openai::OpenAi {
-				api_key: openai_api_key(config),
+				api_key: openai_api_key(config, "gpt-5.6-luna")?,
 				model: openai::OpenAiModel::Luna,
 			}),
 			Model::Medium => Box::new(openai::OpenAi {
-				api_key: openai_api_key(config),
+				api_key: openai_api_key(config, "gpt-5.6-terra")?,
 				model: openai::OpenAiModel::Terra,
 			}),
-			Model::Slow => {
-				let api_key = claude_api_key(config);
-				Box::new(claude::Claude {
-					api_key,
-					model: claude::ClaudeModel::Opus5,
-				})
-			}
-			Model::PriceInsensitive => {
-				let api_key = claude_api_key(config);
-				Box::new(claude::Claude {
-					api_key,
-					model: claude::ClaudeModel::Fable5,
-				})
-			}
-		}
+			Model::Slow => Box::new(claude::Claude {
+				api_key: claude_api_key(config, "claude-opus-5")?,
+				model: claude::ClaudeModel::Opus5,
+			}),
+			Model::PriceInsensitive => Box::new(claude::Claude {
+				api_key: claude_api_key(config, "claude-fable-5")?,
+				model: claude::ClaudeModel::Fable5,
+			}),
+		})
 	}
 }
 
@@ -316,7 +329,7 @@ pub struct FileAttachment {
 /// Default settings produce a simple oneshot call with Model::Medium.
 pub struct Client {
 	config: config::AppConfig,
-	backend: Box<dyn Backend>,
+	model: Model,
 	max_tokens: Option<usize>,
 	stop_sequences: Option<Vec<String>>,
 	force_json: bool,
@@ -326,26 +339,26 @@ pub struct Client {
 pub(crate) trait Backend: Send + Sync {
 	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
 }
-fn claude_api_key(config: &config::AppConfig) -> String {
+fn claude_api_key(config: &config::AppConfig, model: &'static str) -> Result<String, MissingToken> {
 	config
 		.claude_token
 		.clone()
 		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-		.expect("CLAUDE_TOKEN not set in config or environment")
+		.ok_or_else(|| MissingToken::new("Anthropic", model, "claude_token", "CLAUDE_TOKEN", "claude_token"))
 }
-fn deepseek_api_key(config: &config::AppConfig) -> String {
+fn deepseek_api_key(config: &config::AppConfig, model: &'static str) -> Result<String, MissingToken> {
 	config
 		.deepseek_token
 		.clone()
 		.or_else(|| std::env::var("DEEPSEEK_KEY").ok())
-		.expect("DEEPSEEK_KEY not set in config or environment")
+		.ok_or_else(|| MissingToken::new("DeepSeek", model, "deepseek_token", "DEEPSEEK_KEY", "deepseek_token"))
 }
-fn openai_api_key(config: &config::AppConfig) -> String {
+fn openai_api_key(config: &config::AppConfig, model: &'static str) -> Result<String, MissingToken> {
 	config
 		.openai_token
 		.clone()
 		.or_else(|| std::env::var("OPENAI_API_KEY").ok())
-		.expect("OPENAI_API_KEY not set in config or environment")
+		.ok_or_else(|| MissingToken::new("OpenAI", model, "openai_token", "OPENAI_API_KEY", "openai_token"))
 }
 
 pub(crate) struct Request<'a> {

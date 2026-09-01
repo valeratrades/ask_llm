@@ -366,7 +366,12 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 	}
 
 	let ttfb_start = std::time::Instant::now();
-	let mut response_stream = request_builder.send().await?.bytes_stream();
+	let http_response = request_builder.send().await?;
+	let status = http_response.status();
+	if !status.is_success() {
+		bail!("Claude request failed ({status}): {}", http_response.text().await?);
+	}
+	let mut response_stream = http_response.bytes_stream();
 	let ttfb = ttfb_start.elapsed();
 
 	let mut accumulated_message = String::new();
@@ -439,7 +444,12 @@ async fn stream(request_builder: reqwest::RequestBuilder, model: &ClaudeModel) -
 // rest_g {{{
 async fn rest_g(request_builder: reqwest::RequestBuilder) -> Result<Response> {
 	let ttfb_start = std::time::Instant::now();
-	let value = request_builder.send().await?.json::<Value>().await?;
+	let http_response = request_builder.send().await?;
+	let status = http_response.status();
+	if !status.is_success() {
+		bail!("Claude request failed ({status}): {}", http_response.text().await?);
+	}
+	let value = http_response.json::<Value>().await?;
 	let ttfb = ttfb_start.elapsed();
 	tracing::debug!(?value);
 	let response = serde_json::from_value::<ClaudeResponse>(value.clone()).inspect_err(|e| {
