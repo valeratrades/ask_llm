@@ -132,7 +132,7 @@ impl Model {
 				model: claude::ClaudeModel::Opus5,
 			}),
 			Model::PriceInsensitive => Box::new(claude::Claude {
-				api_key: claude_api_key(config, "claude-fable-5")?,
+				api_key: claude_api_key(config, "claude-fable-5-1")?,
 				model: claude::ClaudeModel::Fable5,
 			}),
 		})

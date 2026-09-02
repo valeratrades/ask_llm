@@ -139,7 +139,7 @@ impl ClaudeModel {
 		match self {
 			ClaudeModel::Sonnet5 => "claude-sonnet-5",
 			ClaudeModel::Opus5 => "claude-opus-5",
-			ClaudeModel::Fable5 => "claude-fable-5",
+			ClaudeModel::Fable5 => "claude-fable-5-1",
 		}
 	}
 
