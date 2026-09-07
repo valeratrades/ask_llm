@@ -41,6 +41,7 @@ impl Claude {
 			.arg("--safe-mode") // the caller's CLAUDE.md, hooks, plugins and MCP servers are not part of the question being asked
 			.args(["--tools", ""]) // an answer, not an agent
 			.arg("--no-session-persistence")
+			// both are exported globally; an inherited one bills credits, which is what this backend exists to stop
 			.env_remove("ANTHROPIC_API_KEY")
 			.env_remove("CLAUDE_TOKEN");
 		if let Some(token) = &self.oauth_token {
@@ -49,14 +50,6 @@ impl Claude {
 		if let Some(system) = system {
 			cmd.arg("--system-prompt").arg(system);
 		}
-		assert!(
-			cmd.as_std()
-				.get_envs()
-				.filter(|(k, v)| v.is_none() && (*k == "ANTHROPIC_API_KEY" || *k == "CLAUDE_TOKEN"))
-				.count() == 2,
-			"an inherited api key makes the child bill credits, which is the thing this backend exists to stop"
-		);
-
 		tracing::debug!(model = self.model.to_str(), effort, prompt_len = prompt.len(), "invoking the claude cli");
 		let output = cmd.output().await?;
 		if !output.status.success() {
