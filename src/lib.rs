@@ -128,11 +128,11 @@ impl Model {
 				model: openai::OpenAiModel::Terra,
 			}),
 			Model::Slow => Box::new(claude::Claude {
-				api_key: claude_api_key(config, "claude-opus-5")?,
+				oauth_token: claude_oauth_token(config),
 				model: claude::ClaudeModel::Opus5,
 			}),
 			Model::PriceInsensitive => Box::new(claude::Claude {
-				api_key: claude_api_key(config, "claude-fable-5-1")?,
+				oauth_token: claude_oauth_token(config),
 				model: claude::ClaudeModel::Fable5,
 			}),
 		})
@@ -257,7 +257,7 @@ pub struct Response {
 	pub text: String,
 	pub cost_cents: f32,
 	pub duration: std::time::Duration,
-	/// Overhead before generation starts (model load for Ollama, network TTFB for Claude).
+	/// Overhead before generation starts (model load for Ollama, time to first token for Claude).
 	pub overhead: std::time::Duration,
 	pub model: String,
 	pub thinking: ThinkingLevel,
@@ -400,12 +400,10 @@ pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqw
 		)
 	})
 }
-fn claude_api_key(config: &config::AppConfig, model: &'static str) -> Result<String, MissingToken> {
-	config
-		.claude_token
-		.clone()
-		.or_else(|| std::env::var("CLAUDE_TOKEN").ok())
-		.ok_or_else(|| MissingToken::new("Anthropic", model, "claude_token", "CLAUDE_TOKEN", "claude_token"))
+/// Not an api key, and optional: Claude is reached through the `claude` CLI, which resolves its own
+/// subscription credentials from the keychain when nothing here overrides them.
+fn claude_oauth_token(config: &config::AppConfig) -> Option<String> {
+	config.claude_token.clone().or_else(|| std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok())
 }
 fn deepseek_api_key(config: &config::AppConfig, model: &'static str) -> Result<String, MissingToken> {
 	config
