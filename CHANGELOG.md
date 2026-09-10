@@ -82,7 +82,7 @@ Anthropic backend rewritten against the current API — the previous request sha
 
 - `Model::PriceInsensitive` targets `claude-fable-5-1`.
 
-## v4.0.0
+## v3.3.0
 
 - **Breaking**: Claude is reached by shelling out to the `claude` CLI (`-p --output-format json`) instead of `POST /v1/messages`, so it bills the Max subscription rather than pay-as-you-go credits. `files` and `stop_sequences` have no CLI equivalent and now hard-error on `Model::Slow`/`PriceInsensitive`; images and documents cannot cross it either. The CLI runs with `--safe-mode --tools "" --no-session-persistence`, and `ANTHROPIC_API_KEY`/`CLAUDE_TOKEN` are scrubbed from its environment — an inherited one would bill credits, which is what this backend exists to stop. `config.claude_token` is now an `sk-ant-oat01-…` OAuth token, and is optional: with nothing set the CLI resolves its own keychain credentials.
 - **Breaking**: every request path returns `ask_llm::Error` instead of `eyre::Report`. A failure names what happened and what to do about it, where the old string was reqwest's `Display` (`error sending request for url (…)`) with no way to tell offline from a revoked key from a retired model.
