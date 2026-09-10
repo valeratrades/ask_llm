@@ -1,7 +1,9 @@
-use eyre::{Result, bail};
 use serde::Deserialize;
 
-use crate::{Backend, Conversation, FORCE_JSON_SUFFIX, Request, Response, Role, ThinkingLevel};
+use crate::{Backend, Cli, Conversation, Error, FORCE_JSON_SUFFIX, Request, Response, Result, Role, ThinkingLevel};
+
+/// Everything under this backend is the `claude` CLI, not `api.anthropic.com`.
+const BACKEND: &str = "the `claude` CLI";
 
 pub(crate) struct Claude {
 	/// `None` leaves credential resolution to the CLI, which reads its own keychain entry.
@@ -14,10 +16,18 @@ impl Claude {
 	/// docs: https://docs.claude.com/en/docs/claude-code/headless
 	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
 		if !request.files.is_empty() {
-			bail!("`files` cannot cross the `claude` CLI; drop the attachment or pick a non-Claude model");
+			return Err(Error::Unsupported {
+				backend: BACKEND,
+				what: "`files`",
+				help: "drop the attachment, or pick a non-Claude `Model`".to_string(),
+			});
 		}
 		if request.stop_sequences.is_some() {
-			bail!("`stop_sequences` has no `claude` CLI equivalent; drop it or pick a non-Claude model");
+			return Err(Error::Unsupported {
+				backend: BACKEND,
+				what: "`stop_sequences`",
+				help: "the CLI has no equivalent flag; drop it, or pick a non-Claude `Model`".to_string(),
+			});
 		}
 		// `max_tokens` is dropped rather than refused: it caps an answer instead of changing which answer is asked for.
 
@@ -51,19 +61,38 @@ impl Claude {
 			cmd.arg("--system-prompt").arg(system);
 		}
 		tracing::debug!(model = self.model.to_str(), effort, prompt_len = prompt.len(), "invoking the claude cli");
-		let output = cmd.output().await?;
+		let output = cmd.output().await.map_err(|source| match source.kind() {
+			std::io::ErrorKind::NotFound => Cli::NotInstalled { source },
+			_ => Cli::Exit {
+				status: "not started".to_string(),
+				stderr: source.to_string(),
+			},
+		})?;
 		if !output.status.success() {
-			bail!("`claude` exited with {}: {}", output.status, String::from_utf8_lossy(&output.stderr));
+			return Err(Cli::Exit {
+				status: output.status.to_string(),
+				stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+			}
+			.into());
 		}
 
-		let envelope: CliResult =
-			serde_json::from_slice(&output.stdout).map_err(|e| eyre::eyre!("failed to parse `claude --output-format json`: {e}\n{}", String::from_utf8_lossy(&output.stdout)))?;
+		let envelope: CliResult = serde_json::from_slice(&output.stdout).map_err(|source| Error::Schema {
+			provider: "claude",
+			source,
+			body: String::from_utf8_lossy(&output.stdout).into_owned(),
+		})?;
 		if envelope.is_error {
-			bail!("`claude` reported a failure ({}): {}", envelope.subtype, envelope.result);
+			return Err(Cli::Failed {
+				subtype: envelope.subtype,
+				message: envelope.result,
+			}
+			.into());
 		}
-		// thinking is billed against the output budget and can consume all of it; an empty string would read as "the model had nothing to say"
 		if envelope.result.trim().is_empty() {
-			bail!("`claude` returned no text (stop_reason: {})", envelope.stop_reason.as_deref().unwrap_or("none"));
+			return Err(Cli::Empty {
+				stop_reason: envelope.stop_reason.unwrap_or_else(|| "none".to_string()),
+			}
+			.into());
 		}
 
 		Ok(Response {
@@ -88,21 +117,27 @@ impl Backend for Claude {
 fn flatten(conversation: &Conversation) -> Result<(Option<String>, String)> {
 	use crate::MessageContent;
 
+	let unsupported = |what: &'static str, help: &str| Error::Unsupported {
+		backend: BACKEND,
+		what,
+		help: help.to_string(),
+	};
+
 	let mut system = None;
 	let mut turns: Vec<(Role, &str)> = Vec::new();
 	for message in &conversation.0 {
 		let MessageContent::Text(text) = &message.content else {
-			bail!("images and documents cannot cross the `claude` CLI; pick a non-Claude model");
+			return Err(unsupported("images and documents", "pick a non-Claude `Model`"));
 		};
 		match message.role {
 			Role::System if system.is_none() && turns.is_empty() => system = Some(text.clone()),
-			Role::System => bail!("only a leading system message maps onto `--system-prompt`"),
+			Role::System => return Err(unsupported("a system message past the first turn", "only a leading one maps onto `--system-prompt`")),
 			role => turns.push((role, text)),
 		}
 	}
 
 	let prompt = match turns.as_slice() {
-		[] => bail!("the conversation carries nothing to ask"),
+		[] => return Err(unsupported("an empty conversation", "add at least one user turn")),
 		[(Role::User, only)] => (*only).to_string(),
 		many => many.iter().map(|(role, text)| format!("{}: {text}", <&str>::from(*role))).collect::<Vec<_>>().join("\n\n"),
 	};
@@ -143,12 +178,12 @@ impl ClaudeModel {
 impl std::str::FromStr for ClaudeModel {
 	type Err = eyre::Report;
 
-	fn from_str(s: &str) -> Result<Self> {
+	fn from_str(s: &str) -> eyre::Result<Self> {
 		Ok(match s {
 			_ if s.to_lowercase().contains("sonnet") => Self::Sonnet5,
 			_ if s.to_lowercase().contains("opus") => Self::Opus5,
 			_ if s.to_lowercase().contains("fable") => Self::Fable5,
-			_ => bail!("Unknown model: {s}"),
+			_ => eyre::bail!("Unknown model: {s}"),
 		})
 	}
 }

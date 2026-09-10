@@ -1,5 +1,5 @@
 //! What a request reports when the selected model's provider was never given a key.
-use ask_llm::{Client, MissingToken, Model, config::AppConfig};
+use ask_llm::{Client, Error, Model, config::AppConfig};
 
 #[tokio::main]
 async fn main() {
@@ -8,17 +8,22 @@ async fn main() {
 		.ask("anything")
 		.await
 		.expect_err("Model::Fast is served by OpenAI, whose key is absent here");
-	let missing: MissingToken = err.downcast().expect("a keyless request fails on the key");
-	println!("{:?}", miette::Report::new(missing));
+	assert!(matches!(err, Error::MissingToken(_)), "a keyless request fails on the key, got {err:?}");
+	println!("{:?}", miette::Report::new(err));
 
-	// Claude never reports MissingToken: the `claude` CLI owns credential resolution. A token that is
-	// present but refused is the provider talking, and must not read as an empty answer.
-	let refused = Client::default()
+	// Claude never reports MissingToken: the `claude` CLI owns credential resolution, so a bogus token
+	// either loses to the CLI's own login or is refused by Anthropic. Either way nothing here goes
+	// looking for a key, so neither outcome can be MissingToken.
+	match Client::default()
 		.claude_token("sk-ant-oat01-not-a-real-token")
 		.model(Model::Slow)
-		.ask("anything")
+		.ask("Reply with the single word: ok")
 		.await
-		.expect_err("Anthropic rejects a bogus token");
-	assert!(refused.downcast_ref::<MissingToken>().is_none(), "past key resolution, this is the provider talking");
-	println!("{refused:#}");
+	{
+		Ok(response) => println!("the CLI resolved its own credentials and answered {:?} {response}", response.text),
+		Err(refused) => {
+			assert!(!matches!(refused, Error::MissingToken(_)), "past key resolution, this is the provider talking");
+			println!("{:?}", miette::Report::new(refused));
+		}
+	}
 }

@@ -1,13 +1,11 @@
-use eyre::Result;
-
-use crate::{Client, Conversation, Model, Response};
+use crate::{Client, Conversation, Error, Model, Response, Result};
 
 pub async fn oneshot(message: impl Into<String>) -> Result<Response> {
 	Client::default().ask(message).await
 }
 
 pub fn oneshot_blocking(message: impl Into<String>) -> Result<Response> {
-	let runtime = tokio::runtime::Runtime::new()?;
+	let runtime = tokio::runtime::Runtime::new().map_err(|e| Error::Other(e.into()))?;
 	runtime.block_on(oneshot(message))
 }
 

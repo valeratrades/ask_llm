@@ -1,10 +1,9 @@
 use std::str::FromStr as _;
 
-use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{Backend, ContentPart, Cost, FORCE_JSON_SUFFIX, FileAttachment, MAX_TOKENS, MessageContent, Request, Response, ThinkingLevel};
+use crate::{Backend, ContentPart, Cost, Error, FORCE_JSON_SUFFIX, FileAttachment, MAX_TOKENS, MessageContent, Request, Response, Result, ThinkingLevel, Transport};
 
 pub(crate) struct OpenAi {
 	pub api_key: String,
@@ -68,16 +67,20 @@ impl OpenAi {
 			.bearer_auth(&self.api_key)
 			.json(&payload)
 			.send()
-			.await?;
+			.await
+			.map_err(|e| Transport::classify("OpenAI", e))?;
 		let ttfb = ttfb_start.elapsed();
 		let parsed: OpenAiResponse = crate::json_response(http_response, "OpenAI").await?;
 
 		let choice = match parsed.choices.into_iter().next() {
 			Some(choice) => choice,
-			None => bail!("OpenAI returned no choices"),
+			None => return Err(eyre::eyre!("OpenAI returned no choices").into()),
 		};
 		if choice.finish_reason == "content_filter" {
-			bail!("OpenAI refused to process the request. This may be due to content policy restrictions.");
+			return Err(Error::Refused {
+				provider: "OpenAI",
+				reason: "content_filter".to_string(),
+			});
 		}
 
 		// `stop` is rejected outright by the reasoning models, so the sequences are cut out of the returned text instead. Same output, but the tokens past the cut are still billed.
@@ -149,12 +152,12 @@ impl OpenAiModel {
 impl std::str::FromStr for OpenAiModel {
 	type Err = eyre::Report;
 
-	fn from_str(s: &str) -> Result<Self> {
+	fn from_str(s: &str) -> eyre::Result<Self> {
 		Ok(match s {
 			_ if s.to_lowercase().contains("sol") => Self::Sol,
 			_ if s.to_lowercase().contains("terra") => Self::Terra,
 			_ if s.to_lowercase().contains("luna") => Self::Luna,
-			_ => bail!("Unknown model: {s}"),
+			_ => eyre::bail!("Unknown model: {s}"),
 		})
 	}
 }

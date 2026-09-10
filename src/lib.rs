@@ -1,14 +1,11 @@
 #![feature(default_field_values)]
 use std::{future::Future, path::Path, pin::Pin};
 
-use eyre::{Result, bail};
-
 mod claude;
-mod deepseek;
 mod error;
 mod ollama;
 mod openai;
-pub use error::MissingToken;
+pub use error::{Api, Cli, Error, MissingToken, Result, Transport};
 
 impl Client {
 	/// Keys absent from `config` are looked up in the environment when the request is made.
@@ -31,11 +28,6 @@ impl Client {
 
 	pub fn claude_token(mut self, token: impl Into<String>) -> Self {
 		self.config.claude_token = Some(token.into());
-		self
-	}
-
-	pub fn deepseek_token(mut self, token: impl Into<String>) -> Self {
-		self.config.deepseek_token = Some(token.into());
 		self
 	}
 
@@ -74,7 +66,7 @@ impl Client {
 	}
 
 	/// Append a file from a filesystem path.
-	pub fn append_file_from_path(self, path: impl AsRef<Path>) -> Result<Self> {
+	pub fn append_file_from_path(self, path: impl AsRef<Path>) -> eyre::Result<Self> {
 		let path = path.as_ref();
 		let data = std::fs::read(path)?;
 		let base64_data = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
@@ -109,7 +101,7 @@ impl Client {
 impl Model {
 	/// Resolved per request rather than at construction, so a key that is missing for *this* model
 	/// surfaces as [`MissingToken`] on the call that needs it.
-	fn into_backend(self, config: &config::AppConfig) -> Result<Box<dyn Backend>, MissingToken> {
+	fn into_backend(self, config: &config::AppConfig) -> std::result::Result<Box<dyn Backend>, MissingToken> {
 		Ok(match self {
 			Model::Cheap => Box::new(ollama::Ollama {
 				model: "qwen3.5:4b".to_string(),
@@ -223,16 +215,16 @@ impl Response {
 
 	/// Convenience wrapper around [extract_codeblocks](#method.extract_codeblocks).
 	/// Returns an error unless exactly one codeblock is found.
-	pub fn extract_codeblock(&self, extensions: Option<Vec<&str>>) -> Result<String> {
+	pub fn extract_codeblock(&self, extensions: Option<Vec<&str>>) -> eyre::Result<String> {
 		let blocks = self.extract_codeblocks(extensions);
 		if blocks.len() == 1 {
 			Ok(blocks.into_iter().next().unwrap())
 		} else {
-			bail!("No codeblocks found or more than one codeblock found.")
+			eyre::bail!("No codeblocks found or more than one codeblock found.")
 		}
 	}
 
-	pub fn extract_html_tag(&self, tag_name: &str) -> Result<String> {
+	pub fn extract_html_tag(&self, tag_name: &str) -> eyre::Result<String> {
 		let opening_tag = format!("<{tag_name}>");
 		let closing_tag = format!("</{tag_name}>");
 		let from_start = self.text.split_once(&opening_tag).unwrap().1;
@@ -384,20 +376,25 @@ impl From<Role> for &'static str {
 	}
 }
 
-/// The body carries the provider's explanation of a rejection, which `error_for_status` throws away, and the raw
-/// json is logged before deserializing so that a schema drift is legible rather than a bare serde path.
-pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqwest::Response, provider: &str) -> Result<T> {
+/// The one place an HTTP rejection becomes an [`Api`] variant; no backend inspects a status code itself.
+/// The raw json is logged before deserializing so that a schema drift is legible rather than a bare serde path.
+pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqwest::Response, provider: &'static str) -> Result<T> {
 	let status = response.status();
+	let retry_after = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).map(str::to_owned);
+	let body = response.text().await.map_err(|e| Transport::classify(provider, e))?;
 	if !status.is_success() {
-		bail!("{provider} request failed ({status}): {}", response.text().await?);
+		return Err(Api::classify(provider, status.as_u16(), retry_after.as_deref(), &body).into());
 	}
-	let value: serde_json::Value = response.json().await?;
+	let value: serde_json::Value = serde_json::from_str(&body).map_err(|source| Error::Schema {
+		provider,
+		source,
+		body: body.clone(),
+	})?;
 	tracing::debug!(provider, ?value);
-	serde_json::from_value(value.clone()).map_err(|e| {
-		eyre::eyre!(
-			"failed to parse {provider} response: {e}\n{}",
-			serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}"))
-		)
+	serde_json::from_value(value.clone()).map_err(|source| Error::Schema {
+		provider,
+		source,
+		body: serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}")),
 	})
 }
 /// Not an api key, and optional: Claude is reached through the `claude` CLI, which resolves its own
@@ -405,14 +402,7 @@ pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqw
 fn claude_oauth_token(config: &config::AppConfig) -> Option<String> {
 	config.claude_token.clone().or_else(|| std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok())
 }
-fn deepseek_api_key(config: &config::AppConfig, model: &'static str) -> Result<String, MissingToken> {
-	config
-		.deepseek_token
-		.clone()
-		.or_else(|| std::env::var("DEEPSEEK_KEY").ok())
-		.ok_or_else(|| MissingToken::new("DeepSeek", model, "deepseek_token", "DEEPSEEK_KEY", "deepseek_token"))
-}
-fn openai_api_key(config: &config::AppConfig, model: &'static str) -> Result<String, MissingToken> {
+fn openai_api_key(config: &config::AppConfig, model: &'static str) -> std::result::Result<String, MissingToken> {
 	config
 		.openai_token
 		.clone()

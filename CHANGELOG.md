@@ -43,7 +43,17 @@ Anthropic backend rewritten against the current API — the previous request sha
 
 - Fix: adaptive thinking is billed against `max_tokens` and can consume all of it, so a tight budget returned an empty string with `stop_reason: "max_tokens"`. That now errors instead of silently reading as "the model had nothing to say". Hit `Medium`/`Slow` first, whose thinking runs even at `ThinkingLevel::None`.
 
-## Unreleased
+## v3.1.0
+
+- **Breaking**: `Model::DeepSeek` is gone. A provider is not a tier — `Model::Fast` now points at `deepseek-v4-flash`, so DeepSeek is reached by asking for the cheap remote tier rather than by naming it.
+- **Breaking**: `Model` is `#[non_exhaustive]`.
+- `Model::Fast` needs `DEEPSEEK_KEY` (or `config.deepseek_token`) instead of `CLAUDE_TOKEN`, and drops file/image support — the DeepSeek backend is text-only.
+- Not published: the account 402s on every call until it is funded.
+- **New**: `transcribe(path)` — speech to text, run locally through `whisper-cli`. The first capability here that reaches no provider, so it has no key, no balance and no rate limit; it sits outside `Client`/`Model` because it is audio-in/text-out rather than a conversation. Takes any format ffmpeg decodes, model from `$WHISPER_MODEL` or the whisper-cpp data dir.
+- **New**: `ask_llm --transcribe <AUDIO>` on the CLI. `QUESTION` became optional to allow it, and is still required without the flag.
+- **New**: `tts::run` — text to speech, moved here wholesale from book_parser so both audio directions live in one place. The progress bar did not come with it: the lib reports `(done, total)` through a callback and the caller renders it, so `indicatif` stays out of the dependency tree. Non-progress script output goes to `tracing` rather than stdout.
+
+## v3.2.0
 
 - **Fix**: cost read `prompt_tokens` flat, at the uncached rate, on every backend. Cached input is a tenth of that rate and a cache write is 1.25x it, so a long reused prefix was reported wrong in both directions — measured against gpt-5.6-luna at 7614 prompt tokens, the write turn was under-reported 20% and the hit turn over-reported 9.7x. `Cost` now carries all four rates and `Usage` normalizes the token counts, which each provider splits differently: Anthropic's `input_tokens` excludes the cache tiers, OpenAI's `prompt_tokens` and DeepSeek's hit/miss pair include them.
 - **Fix**: DeepSeek was priced at 0.14/0.28. Current rates are 0.22 input / 0.007 cached / 0.66 output off-peak, doubling 01:00-04:00 and 06:00-10:00 UTC on weekdays. Nothing in the response says which window a request landed in, so it is taken from the clock.
@@ -64,15 +74,27 @@ Anthropic backend rewritten against the current API — the previous request sha
 - **New**: `Client::claude_token`/`deepseek_token`/`openai_token` builders, so a consumer hands over keys for the providers it plans to use instead of assembling an `AppConfig`.
 - **Fix**: the Anthropic backend never looked at the HTTP status. A rejected key returned `Ok` with an empty string — an invalid key was indistinguishable from a model with nothing to say. Both the streaming and rest paths now fail on non-2xx, as the OpenAI and Ollama backends already did.
 
-## v3.1.0
+### v3.2.1
 
-- **Breaking**: `Model::DeepSeek` is gone. A provider is not a tier — `Model::Fast` now points at `deepseek-v4-flash`, so DeepSeek is reached by asking for the cheap remote tier rather than by naming it.
-- **Breaking**: `Model` is `#[non_exhaustive]`.
-- `Model::Fast` needs `DEEPSEEK_KEY` (or `config.deepseek_token`) instead of `CLAUDE_TOKEN`, and drops file/image support — the DeepSeek backend is text-only.
-- Not published: the account 402s on every call until it is funded.
-- **New**: `transcribe(path)` — speech to text, run locally through `whisper-cli`. The first capability here that reaches no provider, so it has no key, no balance and no rate limit; it sits outside `Client`/`Model` because it is audio-in/text-out rather than a conversation. Takes any format ffmpeg decodes, model from `$WHISPER_MODEL` or the whisper-cpp data dir.
-- **New**: `ask_llm --transcribe <AUDIO>` on the CLI. `QUESTION` became optional to allow it, and is still required without the flag.
-- **New**: `tts::run` — text to speech, moved here wholesale from book_parser so both audio directions live in one place. The progress bar did not come with it: the lib reports `(done, total)` through a callback and the caller renders it, so `indicatif` stays out of the dependency tree. Non-progress script output goes to `tracing` rather than stdout.
+- The cache-tier pricing above landed here rather than in 3.2.0.
+
+### v3.2.2
+
+- `Model::PriceInsensitive` targets `claude-fable-5-1`.
+
+## v4.0.0
+
+- **Breaking**: Claude is reached by shelling out to the `claude` CLI (`-p --output-format json`) instead of `POST /v1/messages`, so it bills the Max subscription rather than pay-as-you-go credits. `files` and `stop_sequences` have no CLI equivalent and now hard-error on `Model::Slow`/`PriceInsensitive`; images and documents cannot cross it either. The CLI runs with `--safe-mode --tools "" --no-session-persistence`, and `ANTHROPIC_API_KEY`/`CLAUDE_TOKEN` are scrubbed from its environment — an inherited one would bill credits, which is what this backend exists to stop. `config.claude_token` is now an `sk-ant-oat01-…` OAuth token, and is optional: with nothing set the CLI resolves its own keychain credentials.
+- **Breaking**: every request path returns `ask_llm::Error` instead of `eyre::Report`. A failure names what happened and what to do about it, where the old string was reqwest's `Display` (`error sending request for url (…)`) with no way to tell offline from a revoked key from a retired model.
+  - `Transport::{Unreachable, Timeout, Send}` — no HTTP response arrived at all, keyed off `reqwest::Error::is_connect()`/`is_timeout()`.
+  - `Api::{Auth, Quota, ModelUnavailable, RateLimited, ContextLength, GeoBlocked, Overloaded, Other}` — the provider answered and refused. Classified once, in `json_response`, off the status, the error envelope and the `retry-after` header. Two envelopes are accepted: OpenAI's `{"error":{"message","type","code"}}` and Ollama's `{"error":"<string>"}`.
+  - `Cli::{NotInstalled, Exit, Failed, Empty}` — the `claude` subprocess. `Empty` is the v3.0.1 case (thinking ate the output budget), which is not a refusal.
+  - `MissingToken`, `Unsupported`, `Schema`, `Refused`, and `Other(eyre::Report)` for everything without a taxonomy.
+  - No `is_transient()`/`is_auth()` predicates: the variants *are* the predicate, and every one carries a miette `help` naming the fix.
+- **Breaking**: the DeepSeek backend, `config::AppConfig::deepseek_token` and `Client::deepseek_token` are gone. `into_backend` never constructed it after v3.2.0 pointed `Model::Fast` at OpenAI, so it was unreachable code failing `cargo clippy --tests -- -Dwarnings`.
+- `transcribe()`, `tts::run()`, `extract_codeblock`, `extract_html_tag` and `append_file_from_path` keep `eyre::Result` — none is on a request path, and none has a provider taxonomy to classify.
+- The `ask_llm` binary returns `miette::Report` rather than unwrapping, so the CLI renders the diagnostic with its `help` instead of a `Debug` dump.
+- Dropped `derive-new`, `futures` and `bytes`, plus reqwest's `blocking` and `stream` features — all left over from the streaming path removed in v3.2.0.
 
 ---
 

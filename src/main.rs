@@ -22,14 +22,16 @@ struct Cli {
 	#[command(flatten)]
 	settings: SettingsFlags,
 }
+/// [miette::Report] rather than a `.unwrap()`: a `thiserror` enum unwraps into its `Debug`, which drops the
+/// `help` naming the fix.
 #[tokio::main]
-async fn main() {
+async fn main() -> miette::Result<()> {
 	v_utils::clientside!();
 	let cli = Cli::parse();
 
 	if let Some(audio) = cli.transcribe {
 		println!("{}", ask_llm::transcribe(audio).await.unwrap());
-		return;
+		return Ok(());
 	}
 
 	let config = AppConfig::try_build(cli.settings).expect("Failed to build config");
@@ -38,7 +40,8 @@ async fn main() {
 	if cli.fast {
 		client = client.max_tokens(4096);
 	}
-	let answer: String = client.ask(cli.question.expect("clap requires it unless --transcribe")).await.unwrap().text;
+	let answer: String = client.ask(cli.question.expect("clap requires it unless --transcribe")).await?.text;
 
 	println!("{answer:#}");
+	Ok(())
 }

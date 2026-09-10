@@ -1,7 +1,6 @@
-use eyre::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::{Backend, FORCE_JSON_SUFFIX, Request, Response, ThinkingLevel};
+use crate::{Backend, Error, FORCE_JSON_SUFFIX, Request, Response, Result, ThinkingLevel, Transport};
 
 pub(crate) struct Ollama {
 	pub model: String,
@@ -10,7 +9,11 @@ pub(crate) struct Ollama {
 impl Ollama {
 	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
 		if !request.files.is_empty() {
-			bail!("Ollama backend does not support file attachments");
+			return Err(Error::Unsupported {
+				backend: "Ollama",
+				what: "file attachments",
+				help: "drop the attachment, or pick a remote `Model`".to_string(),
+			});
 		}
 
 		let mut messages: Vec<OllamaMessage> = Vec::new();
@@ -18,7 +21,13 @@ impl Ollama {
 		for message in &request.conversation.0 {
 			let text = match &message.content {
 				crate::MessageContent::Text(t) => t.clone(),
-				_ => bail!("Ollama backend only supports text messages"),
+				_ => {
+					return Err(Error::Unsupported {
+						backend: "Ollama",
+						what: "images and documents",
+						help: "pick a remote `Model`".to_string(),
+					});
+				}
 			};
 			messages.push(OllamaMessage {
 				role: <&str>::from(message.role).to_string(),
@@ -51,7 +60,12 @@ impl Ollama {
 			ollama_request.options.stop = Some(seqs.iter().map(|s| s.to_string()).collect());
 		}
 
-		let response = reqwest::Client::new().post(&self.url).json(&ollama_request).send().await?;
+		let response = reqwest::Client::new()
+			.post(&self.url)
+			.json(&ollama_request)
+			.send()
+			.await
+			.map_err(|e| Transport::classify("Ollama", e))?;
 		let parsed: OllamaResponse = crate::json_response(response, "Ollama").await?;
 
 		let overhead_nanos = parsed.load_duration + parsed.prompt_eval_duration;
