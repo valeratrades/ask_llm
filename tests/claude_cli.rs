@@ -3,6 +3,9 @@
 //! round trip are one invariant: an answer comes back, and it comes back with a poisoned key in the environment.
 
 #[tokio::test]
+// the `claude` CLI and a subscription to bill are both outside a sandboxed build, where this is the
+// one test that can only fail: `cargo test -- --ignored` is where the invariant is checked
+#[ignore = "shells out to the `claude` CLI and spends a live round trip"]
 async fn answers_without_an_api_key() {
 	// SAFETY: set before the runtime spawns anything that reads the environment
 	unsafe { std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-api03-not-a-real-key") };
