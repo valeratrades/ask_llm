@@ -29,10 +29,10 @@ pub struct Watch {
 /// How the picture moves, which decides the frames looked at.
 #[derive(Clone, Copy, Debug)]
 pub enum Footage {
-	/// A shared screen, slides, edited video: changes in steps, and a board scrolled slowly never differs
-	/// much from one frame to the next, so one is taken every 30s besides.
+	/// A shared screen, slides, edited video: changes in steps. A slow scroll barely differs from one
+	/// frame to the next, so a floor interval takes frames besides.
 	Screen,
-	/// A phone filming a place pans past a sign in a second or two, so every second of it is looked at.
+	/// A phone filming a place pans past a sign in a second or two, so it is sampled densely.
 	Filmed,
 }
 impl Footage {
