@@ -115,17 +115,13 @@ impl Model {
 				api_key: openai_api_key(config, "gpt-5.6-luna")?,
 				model: openai::OpenAiModel::Luna,
 			}),
-			Model::Medium => Box::new(openai::OpenAi {
-				api_key: openai_api_key(config, "gpt-5.6-terra")?,
-				model: openai::OpenAiModel::Terra,
-			}),
-			Model::Slow => Box::new(claude::Claude {
+			Model::Medium | Model::Slow => Box::new(claude::Claude {
 				oauth_token: claude_oauth_token(config),
-				model: claude::ClaudeModel::Opus5,
+				model: claude::ClaudeModel::Opus5_5,
 			}),
 			Model::PriceInsensitive => Box::new(claude::Claude {
 				oauth_token: claude_oauth_token(config),
-				model: claude::ClaudeModel::Fable5,
+				model: claude::ClaudeModel::Fable5_1,
 			}),
 		})
 	}

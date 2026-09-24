@@ -96,6 +96,12 @@ Anthropic backend rewritten against the current API — the previous request sha
 - The `ask_llm` binary returns `miette::Report` rather than unwrapping, so the CLI renders the diagnostic with its `help` instead of a `Debug` dump.
 - Dropped `derive-new`, `futures` and `bytes`, plus reqwest's `blocking` and `stream` features — all left over from the streaming path removed in v3.2.0.
 
+### v3.3.1
+
+- `Model::Medium` and `Model::Slow` both go to `claude-opus-5-5` through the `claude` CLI. `Medium` was `gpt-5.6-terra`, so it no longer accepts images or files: they return `Error::Unsupported`. Only `Model::Fast` (`gpt-5.6-luna`) takes images now.
+- `gpt-5.6-terra` is gone from the OpenAI backend.
+- `Model::PriceInsensitive` stays on `claude-fable-5-1`.
+
 ---
 
 ## v2.1.x and earlier

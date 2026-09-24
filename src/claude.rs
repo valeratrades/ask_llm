@@ -163,15 +163,15 @@ struct CliResult {
 /// ref: https://docs.claude.com/en/docs/about-claude/models/all-models
 pub(crate) enum ClaudeModel {
 	Sonnet5,
-	Opus5,
-	Fable5,
+	Opus5_5,
+	Fable5_1,
 }
 impl ClaudeModel {
 	fn to_str(&self) -> &str {
 		match self {
 			ClaudeModel::Sonnet5 => "claude-sonnet-5",
-			ClaudeModel::Opus5 => "claude-opus-5",
-			ClaudeModel::Fable5 => "claude-fable-5-1",
+			ClaudeModel::Opus5_5 => "claude-opus-5-5",
+			ClaudeModel::Fable5_1 => "claude-fable-5-1",
 		}
 	}
 }
@@ -181,8 +181,8 @@ impl std::str::FromStr for ClaudeModel {
 	fn from_str(s: &str) -> eyre::Result<Self> {
 		Ok(match s {
 			_ if s.to_lowercase().contains("sonnet") => Self::Sonnet5,
-			_ if s.to_lowercase().contains("opus") => Self::Opus5,
-			_ if s.to_lowercase().contains("fable") => Self::Fable5,
+			_ if s.to_lowercase().contains("opus") => Self::Opus5_5,
+			_ if s.to_lowercase().contains("fable") => Self::Fable5_1,
 			_ => eyre::bail!("Unknown model: {s}"),
 		})
 	}

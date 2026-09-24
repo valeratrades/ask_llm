@@ -112,14 +112,12 @@ impl Backend for OpenAi {
 /// ref: https://platform.openai.com/docs/models
 pub(crate) enum OpenAiModel {
 	Sol,
-	Terra,
 	Luna,
 }
 impl OpenAiModel {
 	fn to_str(&self) -> &str {
 		match self {
 			Self::Sol => "gpt-5.6-sol",
-			Self::Terra => "gpt-5.6-terra",
 			Self::Luna => "gpt-5.6-luna",
 		}
 	}
@@ -133,12 +131,6 @@ impl OpenAiModel {
 				million_cached_input_tokens: 0.4,
 				million_cache_write_tokens: 5.0,
 				million_output_tokens: 20.0,
-			},
-			Self::Terra => Cost {
-				million_input_tokens: 2.0,
-				million_cached_input_tokens: 0.2,
-				million_cache_write_tokens: 2.5,
-				million_output_tokens: 12.0,
 			},
 			Self::Luna => Cost {
 				million_input_tokens: 0.2,
@@ -155,7 +147,6 @@ impl std::str::FromStr for OpenAiModel {
 	fn from_str(s: &str) -> eyre::Result<Self> {
 		Ok(match s {
 			_ if s.to_lowercase().contains("sol") => Self::Sol,
-			_ if s.to_lowercase().contains("terra") => Self::Terra,
 			_ if s.to_lowercase().contains("luna") => Self::Luna,
 			_ => eyre::bail!("Unknown model: {s}"),
 		})
@@ -318,7 +309,7 @@ struct OpenAiResponse {
 mod tests {
 	#[test]
 	fn deser_model() {
-		let model = "gpt-5.6-terra".parse::<super::OpenAiModel>().unwrap();
-		assert_eq!(model, super::OpenAiModel::Terra);
+		let model = "gpt-5.6-luna".parse::<super::OpenAiModel>().unwrap();
+		assert_eq!(model, super::OpenAiModel::Luna);
 	}
 }
