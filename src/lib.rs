@@ -81,13 +81,17 @@ impl Client {
 	}
 
 	pub async fn conversation(&self, conv: &Conversation) -> Result<Response> {
+		self.send(conv, &self.files, self.force_json).await
+	}
+
+	async fn send(&self, conv: &Conversation, files: &[FileAttachment], force_json: bool) -> Result<Response> {
 		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
 		let request = Request {
 			conversation: conv,
 			max_tokens: self.max_tokens,
 			stop_sequences: stop_seqs,
-			force_json: self.force_json,
-			files: &self.files,
+			force_json,
+			files,
 			thinking: self.thinking,
 		};
 		let backend = self.model.into_backend(&self.config)?;
@@ -111,7 +115,7 @@ impl Model {
 				model: "translategemma:4b".to_string(),
 				url: "http://localhost:11434/api/chat".to_string(),
 			}),
-			Model::Fast => Box::new(openai::OpenAi {
+			Model::Fast | Model::Video => Box::new(openai::OpenAi {
 				api_key: openai_api_key(config, "gpt-5.6-luna")?,
 				model: openai::OpenAiModel::Luna,
 			}),
@@ -233,8 +237,10 @@ pub mod config;
 mod shortcuts;
 mod transcribe;
 pub mod tts;
+mod watch;
 pub use shortcuts::*;
 pub use transcribe::transcribe;
+pub use watch::{Footage, Said, Shown, Watch, Watched};
 
 /// Every remote model currently offered by every provider here caps out at the same place.
 pub(crate) const MAX_TOKENS: usize = 128_000;
@@ -308,6 +314,8 @@ pub enum Model {
 	PriceInsensitive,
 	Cheap,
 	Translate,
+	/// Reads frames, for [`Client::watch`].
+	Video,
 }
 
 #[derive(Clone, Debug)]

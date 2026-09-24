@@ -261,7 +261,11 @@ impl From<RawEnvelope> for Envelope {
 	fn from(raw: RawEnvelope) -> Self {
 		match raw.error {
 			Some(RawError::Plain(message)) => Self { message: Some(message), code: None },
-			Some(RawError::Structured { message, r#type, code }) => Self { message, code: code.or(r#type) },
+			// either one can be the only one naming the failure: a spent balance is `type: insufficient_quota`, `code: credit_balance_exhausted`
+			Some(RawError::Structured { message, r#type, code }) => Self {
+				message,
+				code: [code, r#type].into_iter().flatten().reduce(|a, b| format!("{a} {b}")),
+			},
 			None => Self::default(),
 		}
 	}

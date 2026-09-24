@@ -28,6 +28,12 @@ fn main() {
 	assert!(matches!(err, Api::Quota { .. }), "a spent account is not a rate limit, got {err:?}");
 	println!("{:?}\n", miette::Report::new(err));
 
+	// a spent prepaid balance names itself in `type` only, `code` being its own
+	let openai_credit = r#"{"error":{"message":"You have no credits remaining.","type":"insufficient_quota","param":null,"code":"credit_balance_exhausted"}}"#;
+	let err = Api::classify("OpenAI", 429, None, openai_credit);
+	assert!(matches!(err, Api::Quota { .. }), "a spent balance is not a rate limit, got {err:?}");
+	println!("{:?}\n", miette::Report::new(err));
+
 	// Ollama's envelope is a bare string where OpenAI's is an object
 	let ollama_404 = r#"{"error":"model \"qwen3.5:4b\" not found, try pulling it first"}"#;
 	let err = Api::classify("Ollama", 404, None, ollama_404);

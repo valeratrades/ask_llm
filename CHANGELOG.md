@@ -102,6 +102,14 @@ Anthropic backend rewritten against the current API — the previous request sha
 - `gpt-5.6-terra` is gone from the OpenAI backend.
 - `Model::PriceInsensitive` stays on `claude-fable-5-1`.
 
+## v3.4.0
+
+- **New**: `Client::watch(media, Watch)` reads anything ffmpeg decodes into timed text: `Watched { speech, shown, frames_read, cost_cents, model }`. Frames are taken where the picture changes (and every `Footage::Screen` 30s / `Footage::Filmed` 1s besides), stamped with their second, and read 24 to a request with the speech around them. Only frames an entry cites are kept, in `Watch::frames` as `<secs>.jpg`. `Api::RateLimited`/`Overloaded` are waited out inside it, so a long read does not lose what it already spent to one 429. Speech not handed over is transcribed by local whisper; media with no picture sends no request and needs no key.
+- **New**: `Model::Video`, the tier for reading frames. `gpt-5.6-luna` for now.
+- **New**: `ask_llm --watch <MEDIA> --footage <screen|filmed> --frames <DIR>`. `--model` no longer defaults in clap: a question takes `medium`, `--watch` takes `video`.
+- `transcribe` runs whisper with timestamps (`-oj`) and joins the segments one per line; it was whisper's own `-nt` stdout.
+- **Fix**: OpenAI's out-of-credit 429 (`type: insufficient_quota`, `code: credit_balance_exhausted`) is `Api::Quota`, as the variant documents, not `Api::RateLimited`. The envelope read `code` and dropped `type` whenever both were present.
+
 ---
 
 ## v2.1.x and earlier

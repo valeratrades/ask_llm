@@ -6,13 +6,19 @@ use std::{
 use eyre::{Result, bail};
 use tokio::process::Command;
 
+use crate::Said;
+
 /// Speech to text, locally. Unlike every other capability here this reaches no provider, so it has
 /// no key, no balance and no rate limit to run out of.
 ///
 /// Takes anything ffmpeg can decode. The model is picked up from `$WHISPER_MODEL`, else from the
 /// whisper-cpp data directory.
 pub async fn transcribe(audio: impl AsRef<Path>) -> Result<String> {
-	let audio = audio.as_ref();
+	Ok(said(audio.as_ref()).await?.into_iter().map(|s| s.text).collect::<Vec<_>>().join("\n"))
+}
+
+/// [`transcribe`], one entry per whisper segment, each at the second it starts.
+pub(crate) async fn said(audio: &Path) -> Result<Vec<Said>> {
 	if !audio.is_file() {
 		bail!("audio file not found: {}", audio.display());
 	}
@@ -20,35 +26,67 @@ pub async fn transcribe(audio: impl AsRef<Path>) -> Result<String> {
 	preflight("ffmpeg").await?;
 	preflight("whisper-cli").await?;
 
-	let wav = tempfile::Builder::new().suffix(".wav").tempfile()?;
+	let dir = tempfile::tempdir()?;
+	let wav = dir.path().join("audio.wav");
 	let decode = Command::new("ffmpeg")
 		.args(["-y", "-loglevel", "error", "-i"])
 		.arg(audio)
-		.args(["-ar", "16000", "-ac", "1"])
-		.arg(wav.path())
+		.args(["-vn", "-ar", "16000", "-ac", "1"])
+		.arg(&wav)
 		.output()
 		.await?;
 	if !decode.status.success() {
 		bail!("ffmpeg failed to decode {}: {}", audio.display(), String::from_utf8_lossy(&decode.stderr).trim());
 	}
 
+	let base = dir.path().join("audio");
 	let out = Command::new("whisper-cli")
 		.arg("-m")
 		.arg(&model)
-		.args(["-l", "auto", "-nt", "-np", "-f"])
-		.arg(wav.path())
+		.args(["-l", "auto", "-np", "-oj", "-f"])
+		.arg(&wav)
+		.arg("-of")
+		.arg(&base)
 		.stdin(Stdio::null())
 		.output()
 		.await?;
-
-	let text = String::from_utf8(out.stdout)?.trim().to_string();
 	// whisper-cli exits 0 even when it never read the audio, so the status is worthless here and an
 	// empty transcript is the only signal that anything went wrong.
-	if text.is_empty() {
+	let json = match std::fs::read_to_string(base.with_extension("json")) {
+		Ok(json) => json,
+		Err(e) => bail!("whisper-cli wrote no transcript for {} ({e}): {}", audio.display(), String::from_utf8_lossy(&out.stderr).trim()),
+	};
+	let parsed: Whisper = serde_json::from_str(&json)?;
+	let said: Vec<Said> = parsed
+		.transcription
+		.into_iter()
+		.map(|s| Said {
+			secs: s.offsets.from as f64 / 1000.,
+			text: s.text.trim().to_string(),
+		})
+		.filter(|s| !s.text.is_empty())
+		.collect();
+	if said.is_empty() {
 		bail!("whisper-cli produced no transcript for {}: {}", audio.display(), String::from_utf8_lossy(&out.stderr).trim());
 	}
-	Ok(text)
+	Ok(said)
 }
+
+#[derive(serde::Deserialize)]
+struct Whisper {
+	transcription: Vec<Segment>,
+}
+#[derive(serde::Deserialize)]
+struct Segment {
+	offsets: Offsets,
+	text: String,
+}
+#[derive(serde::Deserialize)]
+struct Offsets {
+	/// ms
+	from: u64,
+}
+
 fn whisper_model() -> Result<PathBuf> {
 	if let Ok(path) = std::env::var("WHISPER_MODEL") {
 		let path = PathBuf::from(path);
@@ -73,9 +111,9 @@ fn whisper_model() -> Result<PathBuf> {
 		default.display()
 	)
 }
-async fn preflight(bin: &str) -> Result<()> {
+pub(crate) async fn preflight(bin: &str) -> Result<()> {
 	match Command::new(bin).arg("--help").stdout(Stdio::null()).stderr(Stdio::null()).status().await {
 		Ok(_) => Ok(()),
-		Err(e) => bail!("`{bin}` is required for transcription but could not be run: {e}"),
+		Err(e) => bail!("`{bin}` is required but could not be run: {e}"),
 	}
 }
