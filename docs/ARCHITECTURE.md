@@ -1,18 +1,15 @@
 # Architecture
 
 ## Model graph
-A `Model` tier names an entry node, not a deployment. A call walks up from the entry until a node answers.
+Each `Model` variant owns one deployment and is a node. A call enters at the `Model` asked for and walks up until one answers.
 
-The source of truth is `Node` in `src/graph.rs`: `Node::next` is the edge table, an exhaustive `match` with successors ordered cheapest first. The drawing below shows the *shape* only. **Every model name in it is an example of what sat on that node when this was written; the deployments get replaced as providers ship and retire models, and this file is not updated when they do.**
+The source of truth is `Model::next` in `src/model.rs`: one successor per variant, so every path is a chain. The drawing below shows the *shape* only. **Every deployment name in it is an example of what sat on that variant when this was written; deployments get replaced as providers ship and retire models, and this file is not updated when they do.**
 ```
- Translate ─► [local translation model] ─┐                  (alternate path: nothing transitions into it)
-                                         ▼
- Cheap ─────► [local small model] ─► [cheap remote model] ─► [Claude, small] ─► [Claude, mid] ─► [Claude, top]
-                                        ▲ Fast                                   ▲ Medium, Slow   ▲ PriceInsensitive
- Video ─────────────────────────────────┘  (alternate path; enters above the base, which can't read frames)
+ Translate ─► Cheap ─► Fast ─► Medium ─► Slow ─► PriceInsensitive
+                        Video ─┘                  (alternate entry; reads frames, rejoins at Medium)
 
- e.g. local translation = Ollama translategemma, local small = Ollama qwen, cheap remote = OpenAI luna,
-      Claude small/mid/top = sonnet/opus/fable
+ e.g. Translate = Ollama translategemma, Cheap = Ollama qwen, Fast/Video = OpenAI luna,
+      Medium/Slow = Claude opus, PriceInsensitive = Claude fable
 ```
 
 The walk:
@@ -21,5 +18,5 @@ The walk:
 - nothing about a failure outlives the call.
 
 ## Invariants
-- Edges only go up in capability. A call is never answered by a weaker model than the one asked for.
+- `Model::next` only goes up in capability. A call is never answered by a weaker model than the one asked for. Nothing checks this mechanically.
 - `Error::Unrecoverable` means no node on the path can answer this call. If any node failed on something that clears on its own, the call is `Error::Recoverable`.

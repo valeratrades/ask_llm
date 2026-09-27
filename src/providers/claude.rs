@@ -129,14 +129,12 @@ struct CliResult {
 #[derive(Debug, Eq, PartialEq)]
 /// ref: https://docs.claude.com/en/docs/about-claude/models/all-models
 pub(crate) enum ClaudeModel {
-	Sonnet5,
 	Opus5_5,
 	Fable5_1,
 }
 impl ClaudeModel {
 	pub const fn to_str(&self) -> &'static str {
 		match self {
-			ClaudeModel::Sonnet5 => "claude-sonnet-5",
 			ClaudeModel::Opus5_5 => "claude-opus-5-5",
 			ClaudeModel::Fable5_1 => "claude-fable-5-1",
 		}

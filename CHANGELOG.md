@@ -122,6 +122,11 @@ Anthropic backend rewritten against the current API — the previous request sha
 - `Client::watch` waits out any `Error::Recoverable`, taking the provider's `retry_after` when one was sent; it waited out only `RateLimited`/`Overloaded` before.
 - `gpt-5.6-sol` pricing dropped: no tier reached it.
 
+## v3.6.0
+
+- the fallback graph's nodes are the `Model` variants themselves, chained by `Model::next`: `Translate` → `Cheap` → `Fast` → `Medium` → `Slow` → `PriceInsensitive`, with `Video` rejoining at `Medium`. `claude-sonnet-5` is no longer on any path, so a failed `Fast`/`Video` now lands on `Medium` (`claude-opus-5-5`).
+- `Model` derives `Eq`/`PartialEq`.
+
 ---
 
 ## v2.1.x and earlier

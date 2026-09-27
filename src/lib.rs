@@ -3,10 +3,10 @@
 use std::{future::Future, path::Path, pin::Pin};
 
 mod error;
-mod graph;
+mod model;
 mod providers;
 pub use error::{Attempt, Cli, Error, Exhausted, Failure, Recoverable, Result, Transport, Unrecoverable};
-pub use graph::Provider;
+pub use model::{Model, Provider};
 
 impl Client {
 	/// Keys absent from `config` are looked up in the environment when the request is made.
@@ -95,8 +95,8 @@ impl Client {
 			files,
 			thinking: self.thinking,
 		};
-		graph::walk(self.model.entry(), async |node| {
-			let backend = node.backend(&self.config)?;
+		model::walk(self.model, async |model| {
+			let backend = model.backend(&self.config)?;
 			let start = std::time::Instant::now();
 			let mut response = backend.conversation(&request).await?;
 			response.duration = start.elapsed();
@@ -277,20 +277,6 @@ pub enum ThinkingLevel {
 	Low,
 	Medium,
 	High,
-}
-
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, Default, derive_more::FromStr)]
-pub enum Model {
-	Fast,
-	#[default]
-	Medium,
-	Slow,
-	PriceInsensitive,
-	Cheap,
-	Translate,
-	/// Reads frames, for [`Client::watch`].
-	Video,
 }
 
 #[derive(Clone, Debug)]

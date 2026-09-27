@@ -10,6 +10,6 @@ async fn main() {
 		.ask("Reply with the single word: pong")
 		.await
 		.unwrap_or_else(|e| panic!("{:?}", miette::Report::new(e)));
-	assert_eq!(response.model, "claude-sonnet-5", "Luna has no key, so Sonnet 5 is the next node up");
+	assert_eq!(response.model, "claude-opus-5-5", "Luna has no key, so Medium is the next model up");
 	println!("{:?} {response}", response.text);
 }
