@@ -7,9 +7,6 @@ The source of truth is `Model::next` in `src/model.rs`: one successor per varian
 ```
  Translate ─► Cheap ─► Fast ─► Medium ─► Slow ─► PriceInsensitive
                         Video ─┘                  (alternate entry; reads frames, rejoins at Medium)
-
- e.g. Translate = Ollama translategemma, Cheap = Ollama qwen, Fast/Video = OpenAI luna,
-      Medium/Slow = Claude opus, PriceInsensitive = Claude fable
 ```
 
 The walk:
