@@ -2,11 +2,9 @@
 #![feature(error_generic_member_access)]
 use std::{future::Future, path::Path, pin::Pin};
 
-mod claude;
 mod error;
 mod graph;
-mod ollama;
-mod openai;
+mod providers;
 pub use error::{Attempt, Cli, Error, Exhausted, Failure, Recoverable, Result, Transport, Unrecoverable};
 pub use graph::Provider;
 

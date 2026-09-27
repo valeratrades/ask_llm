@@ -4,11 +4,13 @@ use std::future::Future;
 
 use crate::{
 	Backend, Model, Response,
-	claude::{self, ClaudeModel},
 	config::AppConfig,
 	error::{Attempt, Error, Exhausted, Failure, Unrecoverable},
-	ollama,
-	openai::{self, OpenAiModel},
+	providers::{
+		claude::{self, ClaudeModel},
+		ollama,
+		openai::{self, OpenAiModel},
+	},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, derive_more::Display)]
@@ -118,6 +120,9 @@ where
 		frontier.extend(node.next().iter().rev());
 		if dead.contains(&node.provider()) {
 			continue;
+		}
+		if let Some(failed) = attempts.last() {
+			tracing::info!(provider = %node.provider(), model = node.model(), replacing = failed.model, "falling back");
 		}
 		let failure = match attempt(node).await {
 			Ok(response) => return Ok(response),
