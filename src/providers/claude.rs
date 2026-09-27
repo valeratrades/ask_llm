@@ -1,6 +1,8 @@
 use serde::Deserialize;
+use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt as _;
 
-use crate::{Backend, Cli, Conversation, FORCE_JSON_SUFFIX, Failure, Request, Response, Role, ThinkingLevel, Unrecoverable};
+use crate::{Backend, Cli, Conversation, FORCE_JSON_SUFFIX, Failure, FileAttachment, Request, Response, Role, ThinkingLevel, Unrecoverable};
 
 pub(crate) struct Claude {
 	/// `None` leaves credential resolution to the CLI, which reads its own keychain entry.
@@ -12,9 +14,6 @@ impl Claude {
 	/// while `x-api-key` bills pay-as-you-go credits.
 	/// docs: https://docs.claude.com/en/docs/claude-code/headless
 	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response, Failure> {
-		if !request.files.is_empty() {
-			return Err(Unrecoverable::new_unsupported("`files`", "drop the attachment, or pick a non-Claude `Model`".to_string()).into());
-		}
 		if request.stop_sequences.is_some() {
 			return Err(Unrecoverable::new_unsupported("`stop_sequences`", "the CLI has no equivalent flag; drop it, or pick a non-Claude `Model`".to_string()).into());
 		}
@@ -31,11 +30,17 @@ impl Claude {
 			ThinkingLevel::High => "high",
 		};
 
+		// stream-json is the only input the CLI takes content blocks in, so attachments ride along with the prompt
+		let mut content = request.files.iter().map(file_to_content_block).collect::<Result<Vec<_>, _>>()?;
+		content.push(json!({ "type": "text", "text": prompt }));
+		let message = format!("{}\n", json!({ "type": "user", "message": { "role": "user", "content": content } }));
+
 		let mut cmd = tokio::process::Command::new("claude");
 		cmd.arg("-p")
-			.arg(&prompt)
+			.args(["--input-format", "stream-json"])
+			.args(["--output-format", "stream-json"])
+			.arg("--verbose") // the CLI refuses stream-json output without it
 			.args(["--model", self.model.to_str()])
-			.args(["--output-format", "json"])
 			.args(["--effort", effort])
 			.arg("--safe-mode") // the caller's CLAUDE.md, hooks, plugins and MCP servers are not part of the question being asked
 			.args(["--tools", ""]) // an answer, not an agent
@@ -49,16 +54,44 @@ impl Claude {
 		if let Some(system) = system {
 			cmd.arg("--system-prompt").arg(system);
 		}
-		tracing::debug!(model = self.model.to_str(), effort, prompt_len = prompt.len(), "invoking the claude cli");
-		let output = cmd.output().await.map_err(|source| match source.kind() {
-			std::io::ErrorKind::NotFound => Cli::new_not_installed(source),
-			_ => Cli::new_exit("not started".to_string(), source.to_string()),
-		})?;
+		tracing::debug!(
+			model = self.model.to_str(),
+			effort,
+			prompt_len = prompt.len(),
+			files = request.files.len(),
+			"invoking the claude cli"
+		);
+		let mut child = cmd
+			.stdin(std::process::Stdio::piped())
+			.stdout(std::process::Stdio::piped())
+			.stderr(std::process::Stdio::piped())
+			.spawn()
+			.map_err(|source| match source.kind() {
+				std::io::ErrorKind::NotFound => Cli::new_not_installed(source),
+				_ => Cli::new_exit("not started".to_string(), source.to_string()),
+			})?;
+		let mut stdin = child.stdin.take().expect("piped above");
+		// written alongside the wait, so a child filling its stdout pipe cannot stall the write
+		let (written, output) = tokio::join!(
+			async {
+				stdin.write_all(message.as_bytes()).await?;
+				drop(stdin);
+				Ok::<_, std::io::Error>(())
+			},
+			child.wait_with_output()
+		);
+		let output = output.map_err(|source| Cli::new_exit("not awaited".to_string(), source.to_string()))?;
 		if !output.status.success() {
 			return Err(Cli::new_exit(output.status.to_string(), String::from_utf8_lossy(&output.stderr).into_owned()).into());
 		}
 
-		let envelope: CliResult = serde_json::from_slice(&output.stdout).map_err(|source| Unrecoverable::new_schema(source, String::from_utf8_lossy(&output.stdout).into_owned()))?;
+		written.map_err(|source| Cli::new_exit(output.status.to_string(), format!("writing the message to its stdin: {source}")))?;
+
+		let stdout = String::from_utf8_lossy(&output.stdout);
+		let Some(last) = stdout.lines().last() else {
+			return Err(Cli::new_exit(output.status.to_string(), "exited cleanly having printed nothing".to_string()).into());
+		};
+		let envelope: CliResult = serde_json::from_str(last).map_err(|source| Unrecoverable::new_schema(source, stdout.clone().into_owned()))?;
 		if envelope.is_error {
 			return Err(Cli::new_failed(envelope.subtype, envelope.result).into());
 		}
@@ -111,7 +144,25 @@ fn flatten(conversation: &Conversation) -> Result<(Option<String>, String), Unre
 	Ok((system, prompt))
 }
 
-/// the `--output-format json` envelope
+/// A request's file as a Messages API content block: PDFs as documents, images as images, anything else as its text.
+fn file_to_content_block(file: &FileAttachment) -> Result<Value, Unrecoverable> {
+	use base64::Engine;
+	let source = json!({ "type": "base64", "media_type": file.media_type, "data": file.base64_data });
+	Ok(match file.media_type.as_str() {
+		"application/pdf" => json!({ "type": "document", "source": source }),
+		mt if mt.starts_with("image/") => json!({ "type": "image", "source": source }),
+		mt => {
+			let text = base64::engine::general_purpose::STANDARD
+				.decode(&file.base64_data)
+				.ok()
+				.and_then(|bytes| String::from_utf8(bytes).ok())
+				.ok_or_else(|| Unrecoverable::new_unsupported("a binary attachment that is neither an image nor a PDF", format!("`{mt}` has no content block; convert it first")))?;
+			json!({ "type": "text", "text": text })
+		}
+	})
+}
+
+/// the last line of `--output-format stream-json`, the `result` event
 #[derive(Debug, Deserialize)]
 struct CliResult {
 	is_error: bool,

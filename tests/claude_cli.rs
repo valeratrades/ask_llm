@@ -18,3 +18,18 @@ async fn answers_without_an_api_key() {
 
 	assert!(response.text.to_lowercase().contains("pong"), "expected `pong`, got: {}", response.text);
 }
+
+#[tokio::test]
+#[ignore = "shells out to the `claude` CLI and spends a live round trip"]
+async fn sees_an_attached_image() {
+	use base64::Engine;
+	let red = base64::engine::general_purpose::STANDARD.encode(include_bytes!("fixtures/red.png"));
+	let response = ask_llm::Client::default()
+		.model(ask_llm::Model::Medium)
+		.append_file(red, "image/png".into())
+		.ask("What single colour fills the attached image? One word.")
+		.await
+		.expect("the cli path takes the image as a content block");
+
+	assert!(response.text.to_lowercase().contains("red"), "expected `red`, got: {}", response.text);
+}
