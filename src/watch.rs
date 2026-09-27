@@ -6,7 +6,7 @@ use std::{
 use eyre::{bail, eyre};
 use tokio::process::Command;
 
-use crate::{Api, Client, Conversation, Error, FileAttachment, Result, Role};
+use crate::{Client, Conversation, Error, Failure, FileAttachment, Recoverable, Result, Role};
 
 /// The scene score past which ffmpeg counts a frame as the picture changing.
 const SCENE: f64 = 0.06;
@@ -164,15 +164,21 @@ impl Client {
 		Ok(watched)
 	}
 
-	/// A read of many requests must not lose what it already spent to one 429, so the busy provider is waited out.
+	/// A read of many requests must not lose what it already spent to one 429, so a recoverable failure is waited out.
 	async fn patiently(&self, prompt: &str, files: &[FileAttachment]) -> Result<crate::Response> {
 		let mut conv = Conversation::new();
 		conv.add(Role::User, prompt);
 		//LOOP: bounded by the attempts
 		for attempt in 1..=ATTEMPTS {
 			let wait = match self.send(&conv, files, true).await {
-				Err(Error::Api(Api::RateLimited { retry_after, .. })) if attempt < ATTEMPTS => retry_after.unwrap_or(Duration::from_secs(30 * attempt)),
-				Err(Error::Api(Api::Overloaded { .. })) if attempt < ATTEMPTS => Duration::from_secs(30 * attempt),
+				Err(Error::Recoverable(exhausted)) if attempt < ATTEMPTS => exhausted
+					.attempts
+					.iter()
+					.find_map(|a| match a.failure {
+						Failure::Recoverable(Recoverable::RateLimited { retry_after, .. }) => retry_after,
+						_ => None,
+					})
+					.unwrap_or(Duration::from_secs(30 * attempt)),
 				done => return done,
 			};
 			tracing::warn!(attempt, wait_secs = wait.as_secs(), "provider busy, waiting");

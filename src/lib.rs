@@ -1,11 +1,14 @@
 #![feature(default_field_values)]
+#![feature(error_generic_member_access)]
 use std::{future::Future, path::Path, pin::Pin};
 
 mod claude;
 mod error;
+mod graph;
 mod ollama;
 mod openai;
-pub use error::{Api, Cli, Error, MissingToken, Result, Transport};
+pub use error::{Attempt, Cli, Error, Exhausted, Failure, Recoverable, Result, Transport, Unrecoverable};
+pub use graph::Provider;
 
 impl Client {
 	/// Keys absent from `config` are looked up in the environment when the request is made.
@@ -94,40 +97,14 @@ impl Client {
 			files,
 			thinking: self.thinking,
 		};
-		let backend = self.model.into_backend(&self.config)?;
-		let start = std::time::Instant::now();
-		let mut response = backend.conversation(&request).await?;
-		response.duration = start.elapsed();
-		Ok(response)
-	}
-}
-
-impl Model {
-	/// Resolved per request rather than at construction, so a key that is missing for *this* model
-	/// surfaces as [`MissingToken`] on the call that needs it.
-	fn into_backend(self, config: &config::AppConfig) -> std::result::Result<Box<dyn Backend>, MissingToken> {
-		Ok(match self {
-			Model::Cheap => Box::new(ollama::Ollama {
-				model: "qwen3.5:4b".to_string(),
-				url: "http://localhost:11434/api/chat".to_string(),
-			}),
-			Model::Translate => Box::new(ollama::Ollama {
-				model: "translategemma:4b".to_string(),
-				url: "http://localhost:11434/api/chat".to_string(),
-			}),
-			Model::Fast | Model::Video => Box::new(openai::OpenAi {
-				api_key: openai_api_key(config, "gpt-5.6-luna")?,
-				model: openai::OpenAiModel::Luna,
-			}),
-			Model::Medium | Model::Slow => Box::new(claude::Claude {
-				oauth_token: claude_oauth_token(config),
-				model: claude::ClaudeModel::Opus5_5,
-			}),
-			Model::PriceInsensitive => Box::new(claude::Claude {
-				oauth_token: claude_oauth_token(config),
-				model: claude::ClaudeModel::Fable5_1,
-			}),
+		graph::walk(self.model.entry(), async |node| {
+			let backend = node.backend(&self.config)?;
+			let start = std::time::Instant::now();
+			let mut response = backend.conversation(&request).await?;
+			response.duration = start.elapsed();
+			Ok(response)
 		})
+		.await
 	}
 }
 
@@ -337,7 +314,7 @@ pub struct Client {
 	thinking: ThinkingLevel,
 }
 pub(crate) trait Backend: Send + Sync {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = Result<Response>> + Send + 'a>>;
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = std::result::Result<Response, Failure>> + Send + 'a>>;
 }
 
 /// Per-1M-token rates, as every provider quotes them.
@@ -380,38 +357,18 @@ impl From<Role> for &'static str {
 	}
 }
 
-/// The one place an HTTP rejection becomes an [`Api`] variant; no backend inspects a status code itself.
+/// The one place an HTTP rejection becomes a [`Failure`]; no backend inspects a status code itself.
 /// The raw json is logged before deserializing so that a schema drift is legible rather than a bare serde path.
-pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqwest::Response, provider: &'static str) -> Result<T> {
+pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqwest::Response, provider: Provider) -> std::result::Result<T, Failure> {
 	let status = response.status();
 	let retry_after = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).map(str::to_owned);
 	let body = response.text().await.map_err(|e| Transport::classify(provider, e))?;
 	if !status.is_success() {
-		return Err(Api::classify(provider, status.as_u16(), retry_after.as_deref(), &body).into());
+		return Err(Failure::classify(provider, status.as_u16(), retry_after.as_deref(), &body));
 	}
-	let value: serde_json::Value = serde_json::from_str(&body).map_err(|source| Error::Schema {
-		provider,
-		source,
-		body: body.clone(),
-	})?;
-	tracing::debug!(provider, ?value);
-	serde_json::from_value(value.clone()).map_err(|source| Error::Schema {
-		provider,
-		source,
-		body: serde_json::to_string_pretty(&value).unwrap_or_else(|_| format!("{value:?}")),
-	})
-}
-/// Not an api key, and optional: Claude is reached through the `claude` CLI, which resolves its own
-/// subscription credentials from the keychain when nothing here overrides them.
-fn claude_oauth_token(config: &config::AppConfig) -> Option<String> {
-	config.claude_token.clone().or_else(|| std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok())
-}
-fn openai_api_key(config: &config::AppConfig, model: &'static str) -> std::result::Result<String, MissingToken> {
-	config
-		.openai_token
-		.clone()
-		.or_else(|| std::env::var("OPENAI_API_KEY").ok())
-		.ok_or_else(|| MissingToken::new("OpenAI", model, "openai_token", "OPENAI_API_KEY", "openai_token"))
+	let value: serde_json::Value = serde_json::from_str(&body).map_err(|source| Unrecoverable::new_schema(source, body.clone()))?;
+	tracing::debug!(%provider, ?value);
+	serde_json::from_value(value.clone()).map_err(|source| Unrecoverable::new_schema(source, serde_json::to_string_pretty(&value).expect("a parsed Value always serializes")).into())
 }
 
 pub(crate) struct Request<'a> {

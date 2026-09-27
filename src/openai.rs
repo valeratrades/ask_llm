@@ -1,9 +1,7 @@
-use std::str::FromStr as _;
-
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::{Backend, ContentPart, Cost, Error, FORCE_JSON_SUFFIX, FileAttachment, MAX_TOKENS, MessageContent, Request, Response, Result, ThinkingLevel, Transport};
+use crate::{Backend, ContentPart, Cost, FORCE_JSON_SUFFIX, Failure, FileAttachment, MAX_TOKENS, MessageContent, Provider, Request, Response, ThinkingLevel, Transport, Unrecoverable};
 
 pub(crate) struct OpenAi {
 	pub api_key: String,
@@ -11,7 +9,7 @@ pub(crate) struct OpenAi {
 }
 impl OpenAi {
 	///docs: https://platform.openai.com/docs/api-reference/chat/create
-	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
+	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response, Failure> {
 		let mut messages: Vec<OpenAiMessage> = request
 			.conversation
 			.0
@@ -68,19 +66,15 @@ impl OpenAi {
 			.json(&payload)
 			.send()
 			.await
-			.map_err(|e| Transport::classify("OpenAI", e))?;
+			.map_err(|e| Transport::classify(Provider::OpenAi, e))?;
 		let ttfb = ttfb_start.elapsed();
-		let parsed: OpenAiResponse = crate::json_response(http_response, "OpenAI").await?;
+		let parsed: OpenAiResponse = crate::json_response(http_response, Provider::OpenAi).await?;
 
-		let choice = match parsed.choices.into_iter().next() {
-			Some(choice) => choice,
-			None => return Err(eyre::eyre!("OpenAI returned no choices").into()),
+		let Some(choice) = parsed.choices.into_iter().next() else {
+			return Err(Unrecoverable::new_other(200, "a completion with no choices".to_string()).into());
 		};
 		if choice.finish_reason == "content_filter" {
-			return Err(Error::Refused {
-				provider: "OpenAI",
-				reason: "content_filter".to_string(),
-			});
+			return Err(Unrecoverable::new_refused("content_filter".to_string()).into());
 		}
 
 		// `stop` is rejected outright by the reasoning models, so the sequences are cut out of the returned text instead. Same output, but the tokens past the cut are still billed.
@@ -93,7 +87,7 @@ impl OpenAi {
 
 		Ok(Response {
 			text,
-			cost_cents: OpenAiModel::from_str(&parsed.model)?.cost().cents(parsed.usage.into()),
+			cost_cents: self.model.cost().cents(parsed.usage.into()),
 			duration: std::time::Duration::ZERO,
 			overhead: ttfb,
 			model: parsed.model,
@@ -103,7 +97,7 @@ impl OpenAi {
 }
 
 impl Backend for OpenAi {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, Failure>> + Send + 'a>> {
 		Box::pin(self.do_conversation(request))
 	}
 }
@@ -111,13 +105,11 @@ impl Backend for OpenAi {
 #[derive(Debug, Eq, PartialEq)]
 /// ref: https://platform.openai.com/docs/models
 pub(crate) enum OpenAiModel {
-	Sol,
 	Luna,
 }
 impl OpenAiModel {
-	fn to_str(&self) -> &str {
+	pub const fn to_str(&self) -> &'static str {
 		match self {
-			Self::Sol => "gpt-5.6-sol",
 			Self::Luna => "gpt-5.6-luna",
 		}
 	}
@@ -125,13 +117,6 @@ impl OpenAiModel {
 	/// Short-context rates, ref: https://developers.openai.com/api/docs/pricing
 	pub fn cost(&self) -> Cost {
 		match self {
-			// listed as promotional "at least through" 2026-11-21 — a floor on the discount, not an expiry. Was 5.0/30.0 before 2026-08-21.
-			Self::Sol => Cost {
-				million_input_tokens: 4.0,
-				million_cached_input_tokens: 0.4,
-				million_cache_write_tokens: 5.0,
-				million_output_tokens: 20.0,
-			},
 			Self::Luna => Cost {
 				million_input_tokens: 0.2,
 				million_cached_input_tokens: 0.02,
@@ -139,17 +124,6 @@ impl OpenAiModel {
 				million_output_tokens: 1.2,
 			},
 		}
-	}
-}
-impl std::str::FromStr for OpenAiModel {
-	type Err = eyre::Report;
-
-	fn from_str(s: &str) -> eyre::Result<Self> {
-		Ok(match s {
-			_ if s.to_lowercase().contains("sol") => Self::Sol,
-			_ if s.to_lowercase().contains("luna") => Self::Luna,
-			_ => eyre::bail!("Unknown model: {s}"),
-		})
 	}
 }
 
@@ -303,13 +277,4 @@ struct OpenAiResponse {
 	choices: Vec<OpenAiChoice>,
 	usage: OpenAiUsage,
 	model: String,
-}
-
-#[cfg(test)]
-mod tests {
-	#[test]
-	fn deser_model() {
-		let model = "gpt-5.6-luna".parse::<super::OpenAiModel>().unwrap();
-		assert_eq!(model, super::OpenAiModel::Luna);
-	}
 }

@@ -40,7 +40,8 @@ tempfile = "3.24.0"
 thiserror = "2.0.19"
 tokio = { version = "1.52.0", features = ["macros", "process", "rt-multi-thread", "time"] }
 tracing = "0.1.44"
-v_utils = { version = "^2.15.31" }
+tracing-error = "0.2"
+v_utils = { version = "^2.19.3" }
 
 [lints.clippy]
 # Stable
@@ -48,6 +49,7 @@ float_cmp = "allow" # is bad for `==` direct comparisons, but `<` and `>` should
 len_zero = "allow" # `.empty()` is O(1) but on &str only
 undocumented_unsafe_blocks = "warn"
 tabs_in_doc_comments = "allow"
+result_large_err = "allow" # every fallible path is a network or subprocess round trip; the backtrace+spantrace an error carries is noise next to it, and boxing would break matching through `Failure`
 
 # Questionable
 # const fns, so actually more performant

@@ -25,7 +25,7 @@ Provides 2 simple primitives:
 
 `oneshot` and `conversation` functions, which follow standard logic for llm interactions, that most providers share.
 
-Then the model is automatically chosen based on whether we care about cost/speed/quality. Currently this is expressed by choosing `Model::`{`Fast`/`Medium`/`Slow`}, from which we pick a model as hardcoded in current implementation. 
+Then the model is automatically chosen based on whether we care about cost/speed/quality. Currently this is expressed by choosing `Model::`{`Fast`/`Medium`/`Slow`}, which enters a fixed fallback graph of deployments (see [ARCHITECTURE.md](docs/ARCHITECTURE.md)): a node that fails hands the request to the next more capable one. 
 
 When used as a lib, import with
 ```toml
@@ -42,7 +42,7 @@ Wraps the lib with clap. Uses `oneshot` by default, if needing `conversation` - 
 ## Semver
 Note that due to specifics of implementation, minor version bumps can change effective behavior by changing what model processes the request. Only boundary API changes will be marked with major versions.
 
-`ask_llm::Error` is boundary API: adding a variant to it, or to any of `Transport`/`Api`/`Cli`, is a minor bump (all are `#[non_exhaustive]`), but moving a failure from one variant to another is a major one.
+`ask_llm::Error` is boundary API: adding a variant to it, or to any of `Recoverable`/`Unrecoverable`/`Transport`/`Cli`, is a minor bump (all are `#[non_exhaustive]`), but moving a failure from one variant to another is a major one.
 
 
 <br>

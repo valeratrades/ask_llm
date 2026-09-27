@@ -3,7 +3,7 @@ Provides 2 simple primitives:
 
 `oneshot` and `conversation` functions, which follow standard logic for llm interactions, that most providers share.
 
-Then the model is automatically chosen based on whether we care about cost/speed/quality. Currently this is expressed by choosing `Model::`{`Fast`/`Medium`/`Slow`}, from which we pick a model as hardcoded in current implementation. 
+Then the model is automatically chosen based on whether we care about cost/speed/quality. Currently this is expressed by choosing `Model::`{`Fast`/`Medium`/`Slow`}, which enters a fixed fallback graph of deployments (see [ARCHITECTURE.md](docs/ARCHITECTURE.md)): a node that fails hands the request to the next more capable one. 
 
 When used as a lib, import with
 ```toml

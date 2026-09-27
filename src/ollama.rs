@@ -1,19 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Backend, Error, FORCE_JSON_SUFFIX, Request, Response, Result, ThinkingLevel, Transport};
+use crate::{Backend, FORCE_JSON_SUFFIX, Failure, Provider, Request, Response, ThinkingLevel, Transport, Unrecoverable};
 
 pub(crate) struct Ollama {
 	pub model: String,
 	pub url: String,
 }
 impl Ollama {
-	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
+	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response, Failure> {
 		if !request.files.is_empty() {
-			return Err(Error::Unsupported {
-				backend: "Ollama",
-				what: "file attachments",
-				help: "drop the attachment, or pick a remote `Model`".to_string(),
-			});
+			return Err(Unrecoverable::new_unsupported("file attachments", "drop the attachment, or pick a remote `Model`".to_string()).into());
 		}
 
 		let mut messages: Vec<OllamaMessage> = Vec::new();
@@ -22,11 +18,7 @@ impl Ollama {
 			let text = match &message.content {
 				crate::MessageContent::Text(t) => t.clone(),
 				_ => {
-					return Err(Error::Unsupported {
-						backend: "Ollama",
-						what: "images and documents",
-						help: "pick a remote `Model`".to_string(),
-					});
+					return Err(Unrecoverable::new_unsupported("images and documents", "pick a remote `Model`".to_string()).into());
 				}
 			};
 			messages.push(OllamaMessage {
@@ -65,8 +57,8 @@ impl Ollama {
 			.json(&ollama_request)
 			.send()
 			.await
-			.map_err(|e| Transport::classify("Ollama", e))?;
-		let parsed: OllamaResponse = crate::json_response(response, "Ollama").await?;
+			.map_err(|e| Transport::classify(Provider::Ollama, e))?;
+		let parsed: OllamaResponse = crate::json_response(response, Provider::Ollama).await?;
 
 		let overhead_nanos = parsed.load_duration + parsed.prompt_eval_duration;
 		Ok(Response {
@@ -81,7 +73,7 @@ impl Ollama {
 }
 
 impl Backend for Ollama {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, Failure>> + Send + 'a>> {
 		Box::pin(self.do_conversation(request))
 	}
 }

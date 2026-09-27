@@ -110,6 +110,18 @@ Anthropic backend rewritten against the current API — the previous request sha
 - `transcribe` runs whisper with timestamps (`-oj`) and joins the segments one per line; it was whisper's own `-nt` stdout.
 - **Fix**: OpenAI's out-of-credit 429 (`type: insufficient_quota`, `code: credit_balance_exhausted`) is `Api::Quota`, as the variant documents, not `Api::RateLimited`. The envelope read `code` and dropped `type` whenever both were present.
 
+## Unreleased
+
+- **Breaking**: a `Model` tier enters a static fallback graph instead of naming one deployment (see `docs/ARCHITECTURE.md`). When the entry node fails, the next more capable one is tried: `Cheap` climbs `qwen3.5:4b` → `gpt-5.6-luna` → `claude-sonnet-5` → `claude-opus-5-5` → `claude-fable-5-1`; `Translate` enters below `qwen`; `Fast`/`Video` at `luna`; `Medium`/`Slow` at `opus`; `PriceInsensitive` at `fable`. `Response::model` names the node that answered. A spent OpenAI account no longer fails `Fast`.
+- **Breaking**: errors are grouped by what a caller can do, not by where they came from.
+  - `Error::{Recoverable, Unrecoverable}(Exhausted)`: every node on the path failed. `Recoverable` if any of them failed on something that clears on its own, so backing off can help; `Unrecoverable` otherwise. `Exhausted::attempts` lists each node tried, with its `Provider`, model and `Failure`; miette renders all of them.
+  - `Error::Other(eyre::Report)`: local tooling (ffmpeg, whisper, files); never reached a model.
+  - `Failure::{Recoverable, Unrecoverable}` is what one node returned. `Recoverable::{Transport, RateLimited, Overloaded}`, `Unrecoverable::{MissingToken, Auth, Quota, GeoBlocked, ModelUnavailable, ContextLength, Unsupported, Refused, Schema, Cli, Other}`. Variant names and diagnostic codes are the old ones.
+  - `Api` and the top-level `MissingToken` are gone; `Api::classify` is `Failure::classify`, taking a `Provider` instead of a string.
+  - Every variant captures a backtrace and spantrace (`v_utils::macros::wrap_err`).
+- `Client::watch` waits out any `Error::Recoverable`, taking the provider's `retry_after` when one was sent; it waited out only `RateLimited`/`Overloaded` before.
+- `gpt-5.6-sol` pricing dropped: no tier reached it.
+
 ---
 
 ## v2.1.x and earlier

@@ -1,9 +1,6 @@
 use serde::Deserialize;
 
-use crate::{Backend, Cli, Conversation, Error, FORCE_JSON_SUFFIX, Request, Response, Result, Role, ThinkingLevel};
-
-/// Everything under this backend is the `claude` CLI, not `api.anthropic.com`.
-const BACKEND: &str = "the `claude` CLI";
+use crate::{Backend, Cli, Conversation, FORCE_JSON_SUFFIX, Failure, Request, Response, Role, ThinkingLevel, Unrecoverable};
 
 pub(crate) struct Claude {
 	/// `None` leaves credential resolution to the CLI, which reads its own keychain entry.
@@ -14,20 +11,12 @@ impl Claude {
 	/// Shells out to the `claude` CLI instead of `POST /v1/messages`: the CLI bills the Max subscription,
 	/// while `x-api-key` bills pay-as-you-go credits.
 	/// docs: https://docs.claude.com/en/docs/claude-code/headless
-	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response> {
+	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response, Failure> {
 		if !request.files.is_empty() {
-			return Err(Error::Unsupported {
-				backend: BACKEND,
-				what: "`files`",
-				help: "drop the attachment, or pick a non-Claude `Model`".to_string(),
-			});
+			return Err(Unrecoverable::new_unsupported("`files`", "drop the attachment, or pick a non-Claude `Model`".to_string()).into());
 		}
 		if request.stop_sequences.is_some() {
-			return Err(Error::Unsupported {
-				backend: BACKEND,
-				what: "`stop_sequences`",
-				help: "the CLI has no equivalent flag; drop it, or pick a non-Claude `Model`".to_string(),
-			});
+			return Err(Unrecoverable::new_unsupported("`stop_sequences`", "the CLI has no equivalent flag; drop it, or pick a non-Claude `Model`".to_string()).into());
 		}
 		// `max_tokens` is dropped rather than refused: it caps an answer instead of changing which answer is asked for.
 
@@ -62,37 +51,19 @@ impl Claude {
 		}
 		tracing::debug!(model = self.model.to_str(), effort, prompt_len = prompt.len(), "invoking the claude cli");
 		let output = cmd.output().await.map_err(|source| match source.kind() {
-			std::io::ErrorKind::NotFound => Cli::NotInstalled { source },
-			_ => Cli::Exit {
-				status: "not started".to_string(),
-				stderr: source.to_string(),
-			},
+			std::io::ErrorKind::NotFound => Cli::new_not_installed(source),
+			_ => Cli::new_exit("not started".to_string(), source.to_string()),
 		})?;
 		if !output.status.success() {
-			return Err(Cli::Exit {
-				status: output.status.to_string(),
-				stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-			}
-			.into());
+			return Err(Cli::new_exit(output.status.to_string(), String::from_utf8_lossy(&output.stderr).into_owned()).into());
 		}
 
-		let envelope: CliResult = serde_json::from_slice(&output.stdout).map_err(|source| Error::Schema {
-			provider: "claude",
-			source,
-			body: String::from_utf8_lossy(&output.stdout).into_owned(),
-		})?;
+		let envelope: CliResult = serde_json::from_slice(&output.stdout).map_err(|source| Unrecoverable::new_schema(source, String::from_utf8_lossy(&output.stdout).into_owned()))?;
 		if envelope.is_error {
-			return Err(Cli::Failed {
-				subtype: envelope.subtype,
-				message: envelope.result,
-			}
-			.into());
+			return Err(Cli::new_failed(envelope.subtype, envelope.result).into());
 		}
 		if envelope.result.trim().is_empty() {
-			return Err(Cli::Empty {
-				stop_reason: envelope.stop_reason.unwrap_or_else(|| "none".to_string()),
-			}
-			.into());
+			return Err(Cli::new_empty(envelope.stop_reason.unwrap_or_else(|| "none".to_string())).into());
 		}
 
 		Ok(Response {
@@ -107,21 +78,17 @@ impl Claude {
 }
 
 impl Backend for Claude {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response>> + Send + 'a>> {
+	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, Failure>> + Send + 'a>> {
 		Box::pin(self.do_conversation(request))
 	}
 }
 
 /// The CLI takes one prompt string, so turns past the first are labelled by role and concatenated,
 /// and a leading system message is lifted out into `--system-prompt`.
-fn flatten(conversation: &Conversation) -> Result<(Option<String>, String)> {
+fn flatten(conversation: &Conversation) -> Result<(Option<String>, String), Unrecoverable> {
 	use crate::MessageContent;
 
-	let unsupported = |what: &'static str, help: &str| Error::Unsupported {
-		backend: BACKEND,
-		what,
-		help: help.to_string(),
-	};
+	let unsupported = |what: &'static str, help: &str| Unrecoverable::new_unsupported(what, help.to_string());
 
 	let mut system = None;
 	let mut turns: Vec<(Role, &str)> = Vec::new();
@@ -167,7 +134,7 @@ pub(crate) enum ClaudeModel {
 	Fable5_1,
 }
 impl ClaudeModel {
-	fn to_str(&self) -> &str {
+	pub const fn to_str(&self) -> &'static str {
 		match self {
 			ClaudeModel::Sonnet5 => "claude-sonnet-5",
 			ClaudeModel::Opus5_5 => "claude-opus-5-5",
@@ -175,29 +142,11 @@ impl ClaudeModel {
 		}
 	}
 }
-impl std::str::FromStr for ClaudeModel {
-	type Err = eyre::Report;
-
-	fn from_str(s: &str) -> eyre::Result<Self> {
-		Ok(match s {
-			_ if s.to_lowercase().contains("sonnet") => Self::Sonnet5,
-			_ if s.to_lowercase().contains("opus") => Self::Opus5_5,
-			_ if s.to_lowercase().contains("fable") => Self::Fable5_1,
-			_ => eyre::bail!("Unknown model: {s}"),
-		})
-	}
-}
 
 #[cfg(test)]
 mod tests {
 	use super::*;
 	use crate::Message;
-
-	#[test]
-	fn deser_model() {
-		let model = "claude-sonnet-5".parse::<ClaudeModel>().unwrap();
-		assert_eq!(model, ClaudeModel::Sonnet5);
-	}
 
 	#[test]
 	fn flatten_conversation() {
