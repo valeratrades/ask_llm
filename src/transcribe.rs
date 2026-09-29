@@ -54,7 +54,9 @@ pub(crate) async fn said(audio: &Path) -> Result<Vec<Said>> {
 	// empty transcript is the only signal that anything went wrong.
 	let json = match std::fs::read_to_string(base.with_extension("json")) {
 		Ok(json) => json,
-		Err(e) => bail!("whisper-cli wrote no transcript for {} ({e}): {}", audio.display(), String::from_utf8_lossy(&out.stderr).trim()),
+		Err(e) => {
+			bail!("whisper-cli wrote no transcript for {} ({e}): {}", audio.display(), String::from_utf8_lossy(&out.stderr).trim());
+		}
 	};
 	let parsed: Whisper = serde_json::from_str(&json)?;
 	let said: Vec<Said> = parsed
@@ -109,11 +111,13 @@ fn whisper_model() -> Result<PathBuf> {
 	bail!(
 		"no whisper model at {}. Fetch one with `whisper-cpp-download-ggml-model base.en`, or point $WHISPER_MODEL at it. Present in that directory: {available:?}",
 		default.display()
-	)
+	);
 }
 pub(crate) async fn preflight(bin: &str) -> Result<()> {
 	match Command::new(bin).arg("--help").stdout(Stdio::null()).stderr(Stdio::null()).status().await {
 		Ok(_) => Ok(()),
-		Err(e) => bail!("`{bin}` is required but could not be run: {e}"),
+		Err(e) => {
+			bail!("`{bin}` is required but could not be run: {e}");
+		}
 	}
 }

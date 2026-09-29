@@ -7,7 +7,6 @@ description = "make a request to whatever llm is the best these days, without ha
 documentation = "https://github.com/valeratrades/ask_llm/tree/master/README.md"
 homepage = "https://github.com/valeratrades/ask_llm"
 repository = "https://github.com/valeratrades/ask_llm"
-readme = "README.md"
 edition = "2024"
 include = ["src/**/*", "LICENSE", "README.md", "CHANGELOG.md", ".cargo/*", "build.rs"]
 

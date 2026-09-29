@@ -195,7 +195,7 @@ impl Response {
 		if blocks.len() == 1 {
 			Ok(blocks.into_iter().next().unwrap())
 		} else {
-			eyre::bail!("No codeblocks found or more than one codeblock found.")
+			eyre::bail!("No codeblocks found or more than one codeblock found.");
 		}
 	}
 
