@@ -48,6 +48,9 @@ impl Claude {
 			// both are exported globally; an inherited one bills credits, which is what this backend exists to stop
 			.env_remove("ANTHROPIC_API_KEY")
 			.env_remove("CLAUDE_TOKEN");
+		if request.force_json {
+			cmd.args(["--json-schema", r#"{"type":"object"}"#]); // the suffix alone lets prose through before the object
+		}
 		if let Some(token) = &self.oauth_token {
 			cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
 		}
