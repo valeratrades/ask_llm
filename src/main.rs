@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use ask_llm::{
-	Client, Footage, Model, Watch,
+	Client, Footage, Model, Pick, Watch,
 	config::{AppConfig, SettingsFlags},
 };
 use clap::{Parser, ValueEnum};
@@ -15,11 +15,17 @@ struct Cli {
 	#[clap(short, long, value_name = "AUDIO")]
 	transcribe: Option<PathBuf>,
 	/// Read a recording into timed lines: what is said, and what is shown
-	#[clap(short, long, value_name = "MEDIA", requires_all = ["footage", "frames"])]
+	#[clap(short, long, value_name = "MEDIA", requires_all = ["footage", "pick", "frames"])]
 	watch: Option<PathBuf>,
 	/// How the picture of `--watch` moves
 	#[clap(long)]
 	footage: Option<FootageArg>,
+	/// Where `--watch` takes frames from
+	#[clap(long)]
+	pick: Option<PickArg>,
+	/// Least seconds between frames under `--pick likely`
+	#[clap(long, default_value_t = 0.5)]
+	every: f64,
 	/// Where `--watch` keeps the frames it cites
 	#[clap(long, value_name = "DIR")]
 	frames: Option<PathBuf>,
@@ -55,6 +61,11 @@ async fn main() -> miette::Result<()> {
 				FootageArg::Screen => Footage::Screen,
 				FootageArg::Filmed => Footage::Filmed,
 			},
+			pick: match cli.pick.expect("clap requires it with --watch") {
+				PickArg::Changes => Pick::Changes,
+				PickArg::Likely => Pick::Likely { every: cli.every },
+			},
+			about: None,
 			frames: cli.frames.expect("clap requires it with --watch"),
 		};
 		let watched = Client::new(config).model(cli.model.unwrap_or(Model::Video)).watch(&media, spec).await?;
@@ -68,9 +79,10 @@ async fn main() -> miette::Result<()> {
 			println!("{:02}:{:02}:{:02} {line}", secs / 3600, secs % 3600 / 60, secs % 60);
 		}
 		eprintln!(
-			"{} frames read by {}, {:.4}¢",
+			"{} frames read by {}, picked by {}, {:.4}¢",
 			watched.frames_read,
 			watched.model.as_deref().unwrap_or("nothing"),
+			watched.picked_by.as_deref().unwrap_or("change alone"),
 			watched.cost_cents
 		);
 		return Ok(());
@@ -89,4 +101,9 @@ async fn main() -> miette::Result<()> {
 enum FootageArg {
 	Screen,
 	Filmed,
+}
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum PickArg {
+	Changes,
+	Likely,
 }

@@ -215,7 +215,7 @@ pub mod tts;
 mod watch;
 pub use shortcuts::*;
 pub use transcribe::transcribe;
-pub use watch::{Footage, Said, Shown, Watch, Watched};
+pub use watch::{Footage, Pick, Said, Shown, Watch, Watched};
 
 /// Every remote model currently offered by every provider here caps out at the same place.
 pub(crate) const MAX_TOKENS: usize = 128_000;
@@ -288,6 +288,7 @@ pub struct FileAttachment {
 /// Client for interacting with LLMs.
 ///
 /// Default settings produce a simple oneshot call with Model::Medium.
+#[derive(Clone)]
 pub struct Client {
 	config: config::AppConfig,
 	model: Model,

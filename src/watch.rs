@@ -6,7 +6,7 @@ use std::{
 use eyre::{bail, eyre};
 use tokio::process::Command;
 
-use crate::{Client, Conversation, Error, Failure, FileAttachment, Recoverable, Result, Role};
+use crate::{Client, Conversation, Error, Failure, FileAttachment, Model, Recoverable, Result, Role};
 
 /// The scene score past which ffmpeg counts a frame as the picture changing.
 const SCENE: f64 = 0.06;
@@ -22,6 +22,9 @@ pub struct Watch {
 	/// What is said, where the caller already has it timed. `None` has local whisper transcribe the audio.
 	pub speech: Option<Vec<Said>>,
 	pub footage: Footage,
+	pub pick: Pick,
+	/// Context for picking where to look, never parsed: a video's description, a call's summary.
+	pub about: Option<String>,
 	/// Where each frame an entry cites is kept, as `<secs>.jpg`.
 	pub frames: PathBuf,
 }
@@ -43,6 +46,16 @@ impl Footage {
 			Self::Filmed => (1., 1),
 		}
 	}
+}
+
+/// Which stretches of the recording frames are taken from.
+#[derive(Clone, Copy, Debug)]
+pub enum Pick {
+	/// The whole recording, at [`Footage`]'s pace.
+	Changes,
+	/// Only where `Model::Fast`, reading the speech, expects something to be shown; there, a frame
+	/// wherever the picture changes, at least `every` seconds apart. Needs speech to read.
+	Likely { every: f64 },
 }
 
 #[derive(Clone, Debug)]
@@ -69,19 +82,21 @@ pub struct Watched {
 	pub cost_cents: f32,
 	/// `None` where there was no picture, so nothing was asked.
 	pub model: Option<String>,
+	/// The model that named where to look, under [`Pick::Likely`].
+	pub picked_by: Option<String>,
 }
 
 impl Client {
 	/// Read a recording into timed text: what is said, and what is shown that the speech does not say.
 	///
-	/// Takes anything ffmpeg decodes. Frames are taken where the picture changes and read with the
-	/// client's model, which has to take images:
+	/// Takes anything ffmpeg decodes. Frames are taken where the picture changes, within what
+	/// [`Pick`] names, and read with the client's model, which has to take images:
 	/// ```no_run
 	/// # async fn f() -> ask_llm::Result<()> {
-	/// use ask_llm::{Client, Footage, Model, Watch};
+	/// use ask_llm::{Client, Footage, Model, Pick, Watch};
 	/// let watched = Client::default()
 	/// 	.model(Model::Video)
-	/// 	.watch("call.mp4", Watch { title: "setup call".into(), speech: None, footage: Footage::Screen, frames: "call/frames".into() })
+	/// 	.watch("call.mp4", Watch { title: "setup call".into(), speech: None, footage: Footage::Screen, pick: Pick::Changes, about: None, frames: "call/frames".into() })
 	/// 	.await?;
 	/// # Ok(()) }
 	/// ```
@@ -102,6 +117,7 @@ impl Client {
 			frames_read: 0,
 			cost_cents: 0.,
 			model: None,
+			picked_by: None,
 		};
 		if !has_stream(media, "v").await? {
 			return Ok(watched);
@@ -109,7 +125,22 @@ impl Client {
 
 		let (gap, floor) = spec.footage.pace();
 		let scratch = tempfile::tempdir().map_err(|e| eyre!(e))?;
-		let frames = changes(media, scratch.path(), gap, floor).await?;
+		let mut frames = match spec.pick {
+			Pick::Changes => changes(media, scratch.path(), gap, floor, None).await?,
+			Pick::Likely { every } => {
+				let (spans, answer) = self.likely(media, &spec.title, spec.about.as_deref(), &watched.speech).await?;
+				watched.cost_cents += answer.cost_cents;
+				watched.picked_by = Some(answer.model);
+				let mut frames = Vec::new();
+				for (i, span) in spans.into_iter().enumerate() {
+					let dir = scratch.path().join(i.to_string());
+					std::fs::create_dir(&dir).map_err(|e| eyre!("{}: {e}", dir.display()))?;
+					frames.extend(changes(media, &dir, every, floor, Some(span)).await?);
+				}
+				frames
+			}
+		};
+		frames.dedup_by_key(|f| f.0); // a frame is named and cited by its whole second, so an `every` under 1s keeps one a second
 		watched.frames_read = frames.len();
 		std::fs::create_dir_all(&spec.frames).map_err(|e| eyre!("{}: {e}", spec.frames.display()))?;
 
@@ -164,6 +195,50 @@ impl Client {
 		Ok(watched)
 	}
 
+	/// `(from, to)` seconds where something is likely shown, sorted and apart, with the answer that named them.
+	async fn likely(&self, media: &Path, title: &str, about: Option<&str>, speech: &[Said]) -> Result<(Vec<(f64, f64)>, crate::Response)> {
+		if speech.is_empty() {
+			return Err(eyre!("{}: nothing said to pick frames by — use `Pick::Changes`", media.display()).into());
+		}
+		let duration = duration(media).await?.floor();
+		let said: String = speech.iter().map(|s| format!("{:.0} {}\n", s.secs, s.text)).collect();
+		let prompt = format!(
+			"The recording \"{title}\" runs {duration}s.{}\n\
+			 What is said in it, each line at its second:\n\n{said}\n\
+			 Name the spans where the speaker shows, demos, scrolls through or reads out something on screen: a site, a dashboard, a document, a search, numbers. \
+			 Talk over a face or a still slide is no span. Start a span at the words that bring up what is shown, and end it where the talk moves on.\n\
+			 Answer {{\"spans\": [{{\"from_secs\": <number>, \"to_secs\": <number>, \"why\": <a few words>}}]}}, with 0 ≤ from_secs < to_secs ≤ {duration}.",
+			about.map(|a| format!("\nAbout it:\n\n{}\n", a.trim())).unwrap_or_default(),
+		);
+		let answer = self.clone().model(Model::Fast).patiently(&prompt, &[]).await?;
+		let listed: Spans = serde_json::from_str(&answer.text).map_err(|e| eyre!("{}: the answer is not the json asked for: {e}\n{}", answer.model, answer.text))?;
+		let mut spans: Vec<(f64, f64)> = Vec::new();
+		for Span { from_secs, to_secs, why } in listed.spans {
+			if !(0. <= from_secs && from_secs < to_secs && to_secs <= duration) {
+				return Err(eyre!("{}: the span {from_secs}–{to_secs}s is not within the {duration}s recording — {why}", answer.model).into());
+			}
+			tracing::info!(from_secs, to_secs, why, "likely shown");
+			spans.push((from_secs, to_secs));
+		}
+		if spans.is_empty() {
+			return Err(eyre!(
+				"{}: named nothing likely shown in {}, so nothing would be read — use `Pick::Changes`",
+				answer.model,
+				media.display()
+			)
+			.into());
+		}
+		spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+		let mut merged: Vec<(f64, f64)> = Vec::new();
+		for (from, to) in spans {
+			match merged.last_mut() {
+				Some(last) if from <= last.1 => last.1 = last.1.max(to),
+				_ => merged.push((from, to)),
+			}
+		}
+		Ok((merged, answer))
+	}
+
 	/// A read of many requests must not lose what it already spent to one 429, so a recoverable failure is waited out.
 	async fn patiently(&self, prompt: &str, files: &[FileAttachment]) -> Result<crate::Response> {
 		let mut conv = Conversation::new();
@@ -186,6 +261,17 @@ impl Client {
 		}
 		unreachable!("the last attempt returns")
 	}
+}
+
+#[derive(serde::Deserialize)]
+struct Spans {
+	spans: Vec<Span>,
+}
+#[derive(serde::Deserialize)]
+struct Span {
+	from_secs: f64,
+	to_secs: f64,
+	why: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -229,16 +315,35 @@ async fn has_stream(media: &Path, kind: &str) -> eyre::Result<bool> {
 	Ok(String::from_utf8(out.stdout)?.lines().any(|l| !l.trim().is_empty() && !l.ends_with(",1")))
 }
 
+async fn duration(media: &Path) -> eyre::Result<f64> {
+	let out = Command::new("ffprobe")
+		.args(["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0"])
+		.arg(media)
+		.output()
+		.await?;
+	if !out.status.success() {
+		bail!("ffprobe could not time {}: {}", media.display(), String::from_utf8_lossy(&out.stderr).trim());
+	}
+	let text = String::from_utf8(out.stdout)?;
+	text.trim().parse().map_err(|e| eyre!("ffprobe timed {} as `{}`: {e}", media.display(), text.trim()))
+}
+
 /// `(secs, jpg)` for every frame where the picture changes or `floor` seconds have passed, at least
-/// `gap` seconds apart, the first frame always among them.
-async fn changes(media: &Path, scratch: &Path, gap: f64, floor: u64) -> eyre::Result<Vec<(u64, PathBuf)>> {
-	let out = Command::new("ffmpeg")
-		.args(["-hide_banner", "-nostats", "-nostdin", "-i"])
+/// `gap` seconds apart, the first frame always among them. Within `span` only, where one is given.
+async fn changes(media: &Path, scratch: &Path, gap: f64, floor: u64, span: Option<(f64, f64)>) -> eyre::Result<Vec<(u64, PathBuf)>> {
+	let mut cmd = Command::new("ffmpeg");
+	cmd.args(["-hide_banner", "-nostats", "-nostdin"]);
+	if let Some((from, to)) = span {
+		cmd.args(["-ss", &from.to_string(), "-t", &(to - from).to_string()]); // before `-i`, so the gaps are seeked past, not decoded
+	}
+	let from = span.map_or(0., |s| s.0);
+	let out = cmd
+		.arg("-i")
 		.arg(media)
 		.args([
 			"-an",
 			"-vf",
-			&format!("select='eq(n\\,0)+gt(scene\\,{SCENE})+gte(t-prev_selected_t\\,{floor})',showinfo,scale=-2:'min(720\\,ih)',pad=iw:ih+40:0:0:black,drawtext=text='%{{eif\\:t\\:d}}s':x=10:y=h-32:fontsize=26:fontcolor=white"),
+			&format!("select='eq(n\\,0)+gt(scene\\,{SCENE})+gte(t-prev_selected_t\\,{floor})',showinfo,scale=-2:'min(720\\,ih)',pad=iw:ih+40:0:0:black,drawtext=text='%{{eif\\:t+{from}\\:d}}s':x=10:y=h-32:fontsize=26:fontcolor=white"),
 			"-fps_mode",
 			"passthrough", // `vfr` drops a frame that shares its stamp with the one before, and showinfo still names it
 			"-q:v",
@@ -270,7 +375,7 @@ async fn changes(media: &Path, scratch: &Path, gap: f64, floor: u64) -> eyre::Re
 			bail!("showinfo named a frame ffmpeg did not write: {}", jpg.display());
 		}
 		if t - last >= gap {
-			kept.push((t as u64, jpg));
+			kept.push(((from + t) as u64, jpg));
 			last = t;
 		}
 	}

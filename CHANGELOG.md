@@ -127,6 +127,15 @@ Anthropic backend rewritten against the current API — the previous request sha
 - the fallback graph's nodes are the `Model` variants themselves, chained by `Model::next`: `Translate` → `Cheap` → `Fast` → `Medium` → `Slow` → `PriceInsensitive`, with `Video` rejoining at `Medium`. `claude-sonnet-5` is no longer on any path, so a failed `Fast`/`Video` now lands on `Medium` (`claude-opus-5-5`).
 - `Model` derives `Eq`/`PartialEq`.
 
+## v3.7.0
+
+- **Breaking**: `Watch` takes `pick: Pick` and `about: Option<String>`; neither has a default.
+  - `Pick::Changes` is what `watch` did before: frames where the picture changes, over the whole recording.
+  - `Pick::Likely { every }` has `Model::Fast` read the title, duration, `about` and every timed `Said`, and name the spans where something is likely shown. Frames are taken only inside them, where the picture changes, at least `every` seconds apart (and at most one a second, as a frame is named by its second). Empty speech, a span outside the recording, or no span at all is an error; nothing falls back to `Pick::Changes`.
+- **New**: `Watched::picked_by` names the model that picked the spans; the pick's cost is in `cost_cents`.
+- **New**: `ask_llm --watch` requires `--pick <changes|likely>`, with `--every` (0.5s) for `likely`.
+- `Client` derives `Clone`.
+
 ---
 
 ## v2.1.x and earlier
