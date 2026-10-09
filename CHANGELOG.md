@@ -136,6 +136,10 @@ Anthropic backend rewritten against the current API — the previous request sha
 - **New**: `ask_llm --watch` requires `--pick <changes|likely>`, with `--every` (0.5s) for `likely`.
 - `Client` derives `Clone`.
 
+### v3.7.1
+
+- `Pick::Likely` where the picker names no span reads nothing and returns: `Watched { model: None, picked_by: Some(_), frames_read: 0 }`. It was an error.
+
 ---
 
 ## v2.1.x and earlier

@@ -80,7 +80,7 @@ pub struct Watched {
 	pub shown: Vec<Shown>,
 	pub frames_read: usize,
 	pub cost_cents: f32,
-	/// `None` where there was no picture, so nothing was asked.
+	/// `None` where nothing was read: no picture, or none of it picked.
 	pub model: Option<String>,
 	/// The model that named where to look, under [`Pick::Likely`].
 	pub picked_by: Option<String>,
@@ -207,7 +207,7 @@ impl Client {
 			 What is said in it, each line at its second:\n\n{said}\n\
 			 Name the spans where the speaker shows, demos, scrolls through or reads out something on screen: a site, a dashboard, a document, a search, numbers. \
 			 Talk over a face or a still slide is no span. Start a span at the words that bring up what is shown, and end it where the talk moves on.\n\
-			 Answer {{\"spans\": [{{\"from_secs\": <number>, \"to_secs\": <number>, \"why\": <a few words>}}]}}, with 0 ≤ from_secs < to_secs ≤ {duration}.",
+			 Answer {{\"spans\": [{{\"from_secs\": <number>, \"to_secs\": <number>, \"why\": <a few words>}}]}}, with 0 ≤ from_secs < to_secs ≤ {duration}; no spans where nothing is.",
 			about.map(|a| format!("\nAbout it:\n\n{}\n", a.trim())).unwrap_or_default(),
 		);
 		let answer = self.clone().model(Model::Fast).patiently(&prompt, &[]).await?;
@@ -219,14 +219,6 @@ impl Client {
 			}
 			tracing::info!(from_secs, to_secs, why, "likely shown");
 			spans.push((from_secs, to_secs));
-		}
-		if spans.is_empty() {
-			return Err(eyre!(
-				"{}: named nothing likely shown in {}, so nothing would be read — use `Pick::Changes`",
-				answer.model,
-				media.display()
-			)
-			.into());
 		}
 		spans.sort_by(|a, b| a.0.total_cmp(&b.0));
 		let mut merged: Vec<(f64, f64)> = Vec::new();

@@ -31,6 +31,41 @@ async fn reads_only_where_the_speech_says_something_is_shown() {
 	check(&clip, &dir.path().join("frames"), Some(speech), Pick::Likely { every: 0.5 }, &[(40, "9203")], &["4417"]).await;
 }
 
+#[tokio::test]
+#[ignore = "spends a live OpenAI round trip"]
+async fn reads_nothing_where_the_speech_shows_nothing() {
+	let dir = tempfile::tempdir().unwrap();
+	let clip = dir.path().join("clip.mp4");
+	invoice_then_refund(&clip, 20);
+	let said = [
+		(0., "Hi everyone, thanks for joining. Let me tell you a bit about how we started."),
+		(15., "We were three friends back then, working out of a garage, no clients at all."),
+		(30., "That is all from me today, thanks for listening, see you next week."),
+	];
+	let watched = Client::default()
+		.model(Model::Video)
+		.watch(
+			&clip,
+			Watch {
+				title: "how we started".into(),
+				speech: Some(said.map(|(secs, text)| Said { secs, text: text.into() }).to_vec()),
+				footage: Footage::Screen,
+				pick: Pick::Likely { every: 0.5 },
+				about: None,
+				frames: dir.path().join("frames"),
+			},
+		)
+		.await
+		.unwrap();
+	assert_eq!(
+		(watched.frames_read, watched.model.as_deref()),
+		(0, None),
+		"nothing was said to be shown, and frames were read: {:#?}",
+		watched.shown
+	);
+	assert!(watched.picked_by.is_some() && watched.cost_cents > 0., "the pick itself is a request");
+}
+
 /// `secs` of `INVOICE 4417`, then `secs` of `REFUND 9203`, with no audio.
 fn invoice_then_refund(clip: &Path, secs: u64) {
 	let status = Command::new("ffmpeg")
