@@ -13,6 +13,7 @@ use crate::{
 	},
 };
 
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, derive_more::Display)]
 pub enum Provider {
 	Ollama,
@@ -34,30 +35,6 @@ pub enum Model {
 	/// Reads frames, for [`Client::watch`](crate::Client::watch).
 	Video,
 }
-/// What a [`Model`] runs on; the provider and the backend both follow from it.
-enum Deployment {
-	Ollama(&'static str),
-	OpenAi(OpenAiModel),
-	Claude(ClaudeModel),
-}
-impl Deployment {
-	const fn provider(&self) -> Provider {
-		match self {
-			Self::Ollama(_) => Provider::Ollama,
-			Self::OpenAi(_) => Provider::OpenAi,
-			Self::Claude(_) => Provider::Claude,
-		}
-	}
-
-	const fn name(&self) -> &'static str {
-		match self {
-			Self::Ollama(name) => name,
-			Self::OpenAi(model) => model.to_str(),
-			Self::Claude(model) => model.to_str(),
-		}
-	}
-}
-
 impl Model {
 	/// The fallback edge. Never points to a weaker model.
 	const fn next(self) -> Option<Model> {
@@ -100,6 +77,30 @@ impl Model {
 				model,
 			}),
 		})
+	}
+}
+
+/// What a [`Model`] runs on; the provider and the backend both follow from it.
+enum Deployment {
+	Ollama(&'static str),
+	OpenAi(OpenAiModel),
+	Claude(ClaudeModel),
+}
+impl Deployment {
+	const fn provider(&self) -> Provider {
+		match self {
+			Self::Ollama(_) => Provider::Ollama,
+			Self::OpenAi(_) => Provider::OpenAi,
+			Self::Claude(_) => Provider::Claude,
+		}
+	}
+
+	const fn name(&self) -> &'static str {
+		match self {
+			Self::Ollama(name) => name,
+			Self::OpenAi(model) => model.to_str(),
+			Self::Claude(model) => model.to_str(),
+		}
 	}
 }
 
