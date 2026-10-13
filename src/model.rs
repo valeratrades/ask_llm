@@ -34,15 +34,31 @@ pub enum Model {
 	/// Reads frames, for [`Client::watch`](crate::Client::watch).
 	Video,
 }
-impl Model {
-	const fn provider(self) -> Provider {
+/// What a [`Model`] runs on; the provider and the backend both follow from it.
+enum Deployment {
+	Ollama(&'static str),
+	OpenAi(OpenAiModel),
+	Claude(ClaudeModel),
+}
+impl Deployment {
+	const fn provider(&self) -> Provider {
 		match self {
-			Self::Translate | Self::Cheap => Provider::Ollama,
-			Self::Fast | Self::Video => Provider::OpenAi,
-			Self::Medium | Self::Slow | Self::PriceInsensitive => Provider::Claude,
+			Self::Ollama(_) => Provider::Ollama,
+			Self::OpenAi(_) => Provider::OpenAi,
+			Self::Claude(_) => Provider::Claude,
 		}
 	}
 
+	const fn name(&self) -> &'static str {
+		match self {
+			Self::Ollama(name) => name,
+			Self::OpenAi(model) => model.to_str(),
+			Self::Claude(model) => model.to_str(),
+		}
+	}
+}
+
+impl Model {
 	/// The fallback edge. Never points to a weaker model.
 	const fn next(self) -> Option<Model> {
 		match self {
@@ -55,37 +71,33 @@ impl Model {
 		}
 	}
 
-	const fn deployment(self) -> &'static str {
+	const fn deployment(self) -> Deployment {
 		match self {
-			Self::Translate => "translategemma:4b",
-			Self::Cheap => "qwen3.5:4b",
-			Self::Fast | Self::Video => OpenAiModel::Luna.to_str(),
-			Self::Medium | Self::Slow => ClaudeModel::Opus5_5.to_str(),
-			Self::PriceInsensitive => ClaudeModel::Fable5_1.to_str(),
+			Self::Translate => Deployment::Ollama("translategemma:4b"),
+			Self::Cheap => Deployment::Ollama("qwen3.5:4b"),
+			Self::Fast | Self::Video => Deployment::OpenAi(OpenAiModel::Luna),
+			Self::Medium | Self::Slow => Deployment::Claude(ClaudeModel::Opus5_5),
+			Self::PriceInsensitive => Deployment::Claude(ClaudeModel::Fable5_1),
 		}
 	}
 
 	/// Resolved per request, so a key missing for *this* model fails only this model.
 	pub(crate) fn backend(self, config: &AppConfig) -> Result<Box<dyn Backend>, Failure> {
-		Ok(match self {
-			Self::Translate | Self::Cheap => Box::new(ollama::Ollama {
-				model: self.deployment().to_string(),
+		Ok(match self.deployment() {
+			Deployment::Ollama(model) => Box::new(ollama::Ollama {
+				model: model.to_string(),
 				url: "http://localhost:11434/api/chat".to_string(),
 			}),
-			Self::Fast | Self::Video => Box::new(openai::OpenAi {
+			Deployment::OpenAi(model) => Box::new(openai::OpenAi {
 				api_key: config.openai_token.clone().or_else(|| std::env::var("OPENAI_API_KEY").ok()).ok_or_else(|| {
 					Unrecoverable::new_missing_token("hand it over with `Client::openai_token(…)`, put `openai_token` in ~/.config/ask_llm.nix, or export OPENAI_API_KEY".to_string())
 				})?,
-				model: OpenAiModel::Luna,
+				model,
 			}),
-			Self::Medium | Self::Slow | Self::PriceInsensitive => Box::new(claude::Claude {
+			Deployment::Claude(model) => Box::new(claude::Claude {
 				// not an api key, and optional: the `claude` CLI resolves its own subscription credentials when nothing here overrides them
 				oauth_token: config.claude_token.clone().or_else(|| std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok()),
-				model: match self {
-					Self::Medium | Self::Slow => ClaudeModel::Opus5_5,
-					Self::PriceInsensitive => ClaudeModel::Fable5_1,
-					_ => unreachable!("matched on the outer arm"),
-				},
+				model,
 			}),
 		})
 	}
@@ -102,25 +114,26 @@ where
 	let mut next = Some(entry);
 	while let Some(model) = next {
 		next = model.next();
-		if dead.contains(&model.provider()) {
+		let deployment = model.deployment();
+		if dead.contains(&deployment.provider()) {
 			continue;
 		}
 		if let Some(failed) = attempts.last() {
-			tracing::info!(provider = %model.provider(), model = model.deployment(), replacing = failed.model, "falling back");
+			tracing::info!(provider = %deployment.provider(), model = deployment.name(), replacing = failed.model, "falling back");
 		}
 		let failure = match attempt(model).await {
 			Ok(response) => return Ok(response),
 			Err(failure) => failure,
 		};
-		tracing::warn!(provider = %model.provider(), model = model.deployment(), %failure, "climbing past a failed model");
+		tracing::warn!(provider = %deployment.provider(), model = deployment.name(), %failure, "climbing past a failed model");
 		if let Failure::Unrecoverable(u) = &failure
 			&& !model_scoped(u)
 		{
-			dead.push(model.provider());
+			dead.push(deployment.provider());
 		}
 		attempts.push(Attempt {
-			provider: model.provider(),
-			model: model.deployment(),
+			provider: deployment.provider(),
+			model: deployment.name(),
 			failure,
 		});
 	}
@@ -161,7 +174,7 @@ mod tests {
 			cost_cents: 0.,
 			duration: std::time::Duration::ZERO,
 			overhead: std::time::Duration::ZERO,
-			model: model.deployment().to_string(),
+			model: model.deployment().name().to_string(),
 			thinking: ThinkingLevel::None,
 		}
 	}
@@ -186,7 +199,7 @@ mod tests {
 	#[tokio::test]
 	async fn spent_openai_account_hands_over_to_claude() {
 		let (result, tried) = run(Model::Fast, async |model| (model == Model::Fast).then(|| Unrecoverable::new_quota("no credits".into()).into())).await;
-		assert_eq!(result.unwrap().model, Model::Medium.deployment());
+		assert_eq!(result.unwrap().model, Model::Medium.deployment().name());
 		assert_eq!(tried, [Model::Fast, Model::Medium]);
 	}
 
@@ -207,7 +220,7 @@ mod tests {
 			(model == Model::Translate).then(|| Unrecoverable::new_model_unavailable("not pulled".into(), String::new()).into())
 		})
 		.await;
-		assert_eq!(result.unwrap().model, Model::Cheap.deployment());
+		assert_eq!(result.unwrap().model, Model::Cheap.deployment().name());
 		assert_eq!(tried, [Model::Translate, Model::Cheap]);
 	}
 
