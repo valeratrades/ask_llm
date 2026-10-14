@@ -212,6 +212,7 @@ pub mod config;
 mod shortcuts;
 mod transcribe;
 pub mod tts;
+pub mod video;
 mod watch;
 pub use shortcuts::*;
 pub use transcribe::transcribe;

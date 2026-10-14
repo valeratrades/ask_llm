@@ -17,3 +17,6 @@ The walk:
 ## Invariants
 - `Model::next` only goes up in capability. A call is never answered by a weaker model than the one asked for. Nothing checks this mechanically.
 - `Error::Unrecoverable` means no node on the path can answer this call. If any node failed on something that clears on its own, the call is `Error::Recoverable`.
+
+## Generation
+`video` (Vertex Veo) sits outside the graph: a generated clip is not interchangeable across models, so the caller names one model and gets it or an error. No walk, no retry.
