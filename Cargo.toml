@@ -91,3 +91,11 @@ path = "examples/video.rs"
 [[example]]
 name = "segment"
 path = "examples/segment.rs"
+
+[[example]]
+name = "claude_cli"
+path = "examples/claude_cli.rs"
+
+[[example]]
+name = "watch_live"
+path = "examples/watch_live.rs"

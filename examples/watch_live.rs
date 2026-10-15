@@ -1,12 +1,18 @@
-//! `watch` is frames chosen by ffmpeg, read by a remote model, and handed back at the second they were
-//! read off. Only a live round trip covers the three together.
+//! Three live OpenAI round trips: `watch` is frames chosen by ffmpeg, read by a remote model, and handed back at the
+//! second they were read off; only a live round trip covers the three together. Panics on the first that breaks.
 
 use std::{path::Path, process::Command};
 
 use ask_llm::{Client, Footage, Model, Pick, Said, Watch};
 
-#[tokio::test]
-#[ignore = "spends a live OpenAI round trip"]
+#[tokio::main]
+async fn main() {
+	reads_what_the_picture_says_at_its_second().await;
+	reads_only_where_the_speech_says_something_is_shown().await;
+	reads_nothing_where_the_speech_shows_nothing().await;
+	println!("ok");
+}
+
 async fn reads_what_the_picture_says_at_its_second() {
 	let dir = tempfile::tempdir().unwrap();
 	let clip = dir.path().join("clip.mp4");
@@ -14,8 +20,6 @@ async fn reads_what_the_picture_says_at_its_second() {
 	check(&clip, &dir.path().join("frames"), None, Pick::Changes, &[(0, "4417"), (6, "9203")], &[]).await;
 }
 
-#[tokio::test]
-#[ignore = "spends a live OpenAI round trip"]
 async fn reads_only_where_the_speech_says_something_is_shown() {
 	let dir = tempfile::tempdir().unwrap();
 	let clip = dir.path().join("clip.mp4");
@@ -31,8 +35,6 @@ async fn reads_only_where_the_speech_says_something_is_shown() {
 	check(&clip, &dir.path().join("frames"), Some(speech), Pick::Likely { every: 0.5 }, &[(40, "9203")], &["4417"]).await;
 }
 
-#[tokio::test]
-#[ignore = "spends a live OpenAI round trip"]
 async fn reads_nothing_where_the_speech_shows_nothing() {
 	let dir = tempfile::tempdir().unwrap();
 	let clip = dir.path().join("clip.mp4");
