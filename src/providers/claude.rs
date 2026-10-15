@@ -109,6 +109,12 @@ impl Claude {
 			overhead: std::time::Duration::from_millis(envelope.ttft_ms),
 			model: self.model.to_str().to_string(),
 			thinking: request.thinking,
+			usage: crate::Usage {
+				input: envelope.usage.input_tokens,
+				cached_input: envelope.usage.cache_read_input_tokens,
+				cache_write: envelope.usage.cache_creation_input_tokens,
+				output: envelope.usage.output_tokens,
+			},
 		})
 	}
 }
@@ -174,10 +180,21 @@ struct CliResult {
 	result: String,
 	#[serde(default)]
 	stop_reason: Option<String>,
+	/// notional: the CLI bills the subscription
 	total_cost_usd: f64,
+	usage: CliUsage,
 	/// time to first token as the CLI measures it, so process startup sits outside it
 	#[serde(default)]
 	ttft_ms: u64,
+}
+
+/// The cache tiers are additional to `input_tokens`, not a breakdown of it.
+#[derive(Debug, Deserialize)]
+struct CliUsage {
+	input_tokens: u32,
+	cache_read_input_tokens: u32,
+	cache_creation_input_tokens: u32,
+	output_tokens: u32,
 }
 
 #[derive(Debug, Eq, PartialEq)]

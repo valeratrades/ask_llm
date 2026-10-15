@@ -20,3 +20,6 @@ The walk:
 
 ## Generation
 `video` (Vertex Veo) sits outside the graph: a generated clip is not interchangeable across models, so the caller names one model and gets it or an error. No walk, no retry.
+
+## Usage log
+Every call `Client` answers appends one JSON line to `$XDG_DATA_HOME/ask_llm/usage/<app>/<YYYY-MM>.jsonl`; failed calls are not logged. `<app>` is the file stem of `argv[0]`, not of `current_exe()`: a `nix-run-cached` script is exec'd from a content-hashed binary with `argv[0]` set to the script path, so its stem is the script name. `requested` is the `Model` asked for, `model` the deployment that answered.

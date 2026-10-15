@@ -85,13 +85,15 @@ impl OpenAi {
 			text.truncate(cut);
 		}
 
+		let usage = parsed.usage.into();
 		Ok(Response {
 			text,
-			cost_cents: self.model.cost().cents(parsed.usage.into()),
+			cost_cents: self.model.cost().cents(usage),
 			duration: std::time::Duration::ZERO,
 			overhead: ttfb,
 			model: parsed.model,
 			thinking: request.thinking,
+			usage,
 		})
 	}
 }

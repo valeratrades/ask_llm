@@ -177,6 +177,7 @@ mod tests {
 			overhead: std::time::Duration::ZERO,
 			model: model.deployment().name().to_string(),
 			thinking: ThinkingLevel::None,
+			usage: crate::Usage::default(),
 		}
 	}
 

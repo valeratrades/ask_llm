@@ -68,6 +68,11 @@ impl Ollama {
 			overhead: std::time::Duration::from_nanos(overhead_nanos),
 			model: self.model.clone(),
 			thinking: request.thinking,
+			usage: crate::Usage {
+				input: parsed.prompt_eval_count,
+				output: parsed.eval_count,
+				..Default::default()
+			},
 		})
 	}
 }
@@ -109,4 +114,8 @@ struct OllamaResponse {
 	load_duration: u64,
 	#[serde(default)]
 	prompt_eval_duration: u64,
+	#[serde(default)] // ollama omits zero counts
+	prompt_eval_count: u32,
+	#[serde(default)]
+	eval_count: u32,
 }

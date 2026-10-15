@@ -95,59 +95,44 @@ impl Client {
 			files,
 			thinking: self.thinking,
 		};
-		model::walk(self.model, async |model| {
+		let response = model::walk(self.model, async |model| {
 			let backend = model.backend(&self.config)?;
 			let start = std::time::Instant::now();
 			let mut response = backend.conversation(&request).await?;
 			response.duration = start.elapsed();
 			Ok(response)
 		})
-		.await
+		.await?;
+		log_usage(self.model, &response);
+		Ok(response)
 	}
 }
 
-impl Message {
-	fn new(role: Role, content: impl Into<String>) -> Self {
-		Self {
-			role,
-			content: MessageContent::Text(content.into()),
-		}
-	}
+pub mod config;
+mod shortcuts;
+mod transcribe;
+pub mod tts;
+pub mod video;
+mod watch;
+pub use shortcuts::*;
+pub use transcribe::transcribe;
+pub use watch::{Footage, Pick, Said, Shown, Watch, Watched};
 
-	pub fn new_with_image(role: Role, base64_data: String, media_type: String) -> Self {
-		Self {
-			role,
-			content: MessageContent::Image { base64_data, media_type },
-		}
-	}
-
-	pub fn new_with_text_and_images(role: Role, text: String, images: Vec<ImageContent>) -> Self {
-		Self {
-			role,
-			content: MessageContent::TextAndImages { text, images },
-		}
-	}
+/// Every remote model currently offered by every provider here caps out at the same place.
+pub(crate) const MAX_TOKENS: usize = 128_000;
+/// Fences are mentioned because the models otherwise wrap the object in them even when told to emit json only.
+pub(crate) const FORCE_JSON_SUFFIX: &str = "\n\nRespond with valid JSON only, no other text or markdown fences.";
+#[derive(Debug)]
+pub struct Response {
+	pub text: String,
+	pub cost_cents: f32,
+	pub duration: std::time::Duration,
+	/// Overhead before generation starts (model load for Ollama, time to first token for Claude).
+	pub overhead: std::time::Duration,
+	pub model: String,
+	pub thinking: ThinkingLevel,
+	pub(crate) usage: Usage,
 }
-
-impl Conversation {
-	pub fn new() -> Self {
-		Self(Vec::new())
-	}
-
-	pub fn new_with_system(system_message: impl Into<String>) -> Self {
-		Self(vec![Message::new(Role::System, system_message)])
-	}
-
-	pub fn add(&mut self, role: Role, content: impl Into<String>) {
-		self.0.push(Message::new(role, content));
-	}
-
-	pub fn add_exchange(&mut self, user_message: impl Into<String>, assistant_message: impl Into<String>) {
-		self.add(Role::User, user_message);
-		self.add(Role::Assistant, assistant_message);
-	}
-}
-
 impl Response {
 	/// Extract codeblocks with optional extension filtering.
 	/// If extensions is None or empty, all codeblocks are returned.
@@ -208,38 +193,53 @@ impl Response {
 	}
 }
 
-pub mod config;
-mod shortcuts;
-mod transcribe;
-pub mod tts;
-pub mod video;
-mod watch;
-pub use shortcuts::*;
-pub use transcribe::transcribe;
-pub use watch::{Footage, Pick, Said, Shown, Watch, Watched};
-
-/// Every remote model currently offered by every provider here caps out at the same place.
-pub(crate) const MAX_TOKENS: usize = 128_000;
-/// Fences are mentioned because the models otherwise wrap the object in them even when told to emit json only.
-pub(crate) const FORCE_JSON_SUFFIX: &str = "\n\nRespond with valid JSON only, no other text or markdown fences.";
-#[derive(Debug)]
-pub struct Response {
-	pub text: String,
-	pub cost_cents: f32,
-	pub duration: std::time::Duration,
-	/// Overhead before generation starts (model load for Ollama, time to first token for Claude).
-	pub overhead: std::time::Duration,
-	pub model: String,
-	pub thinking: ThinkingLevel,
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct Conversation(pub Vec<Message>);
+impl Conversation {
+	pub fn new() -> Self {
+		Self(Vec::new())
+	}
+
+	pub fn new_with_system(system_message: impl Into<String>) -> Self {
+		Self(vec![Message::new(Role::System, system_message)])
+	}
+
+	pub fn add(&mut self, role: Role, content: impl Into<String>) {
+		self.0.push(Message::new(role, content));
+	}
+
+	pub fn add_exchange(&mut self, user_message: impl Into<String>, assistant_message: impl Into<String>) {
+		self.add(Role::User, user_message);
+		self.add(Role::Assistant, assistant_message);
+	}
+}
 
 #[derive(Clone, Debug)]
 pub struct Message {
 	pub(crate) role: Role,
 	pub(crate) content: MessageContent,
+}
+impl Message {
+	fn new(role: Role, content: impl Into<String>) -> Self {
+		Self {
+			role,
+			content: MessageContent::Text(content.into()),
+		}
+	}
+
+	pub fn new_with_image(role: Role, base64_data: String, media_type: String) -> Self {
+		Self {
+			role,
+			content: MessageContent::Image { base64_data, media_type },
+		}
+	}
+
+	pub fn new_with_text_and_images(role: Role, text: String, images: Vec<ImageContent>) -> Self {
+		Self {
+			role,
+			content: MessageContent::TextAndImages { text, images },
+		}
+	}
 }
 
 #[derive(Clone, Debug)]
@@ -247,14 +247,12 @@ pub struct ImageContent {
 	pub base64_data: String,
 	pub media_type: String,
 }
-
 #[derive(Clone, Debug)]
 pub enum ContentPart {
 	Text(String),
 	Image { base64_data: String, media_type: String },
 	Document { base64_data: String, media_type: String },
 }
-
 #[derive(Clone, Debug)]
 pub enum MessageContent {
 	Text(String),
@@ -263,14 +261,12 @@ pub enum MessageContent {
 	Document { base64_data: String, media_type: String },
 	Mixed { parts: Vec<ContentPart> },
 }
-
 #[derive(Clone, Copy, Debug)]
 pub enum Role {
 	System,
 	User,
 	Assistant,
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 pub enum ThinkingLevel {
 	#[default]
@@ -279,13 +275,11 @@ pub enum ThinkingLevel {
 	Medium,
 	High,
 }
-
 #[derive(Clone, Debug)]
 pub struct FileAttachment {
 	pub base64_data: String,
 	pub media_type: String,
 }
-
 /// Client for interacting with LLMs.
 ///
 /// Default settings produce a simple oneshot call with Model::Medium.
@@ -301,6 +295,38 @@ pub struct Client {
 }
 pub(crate) trait Backend: Send + Sync {
 	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = std::result::Result<Response, Failure>> + Send + 'a>>;
+}
+/// One line per answered call, under the app's `argv[0]` stem; see docs/ARCHITECTURE.md#usage-log.
+fn log_usage(requested: Model, response: &Response) {
+	use std::io::Write as _;
+
+	let argv0 = std::env::args_os().next().expect("every process is started with argv[0]");
+	let app = Path::new(&argv0).file_stem().expect("argv[0] names a file").to_string_lossy().into_owned();
+	let now = jiff::Timestamp::now();
+	let dir = Path::new(&v_utils::io::xdg::xdg_data_fallback()).join("ask_llm/usage").join(app);
+	std::fs::create_dir_all(&dir).expect("the data home is writable");
+	let usage = response.usage;
+	let mut line = serde_json::json!({
+		"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
+		"requested": format!("{requested:?}"),
+		"model": response.model,
+		"thinking": response.thinking.to_string(),
+		"cost_cents": response.cost_cents,
+		"input": usage.input,
+		"cached_input": usage.cached_input,
+		"cache_write": usage.cache_write,
+		"output": usage.output,
+		"duration_ms": response.duration.as_millis(),
+		"overhead_ms": response.overhead.as_millis(),
+	})
+	.to_string();
+	line.push('\n');
+	std::fs::OpenOptions::new()
+		.create(true)
+		.append(true)
+		.open(dir.join(now.strftime("%Y-%m.jsonl").to_string()))
+		.and_then(|mut f| f.write_all(line.as_bytes())) // one write on an O_APPEND fd, so concurrent callers don't interleave
+		.expect("the data home is writable");
 }
 
 /// Per-1M-token rates, as every provider quotes them.
@@ -324,7 +350,7 @@ impl Cost {
 
 /// Token counts lifted out of a provider's usage block. Providers disagree on whether the cache tiers are a
 /// breakdown of the input count or additional to it, so each backend resolves its own before filling this in.
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Usage {
 	/// Billed at full rate: neither served from cache nor written to it.
 	pub input: u32,

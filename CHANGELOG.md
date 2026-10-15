@@ -140,6 +140,11 @@ Anthropic backend rewritten against the current API — the previous request sha
 
 - `Pick::Likely` where the picker names no span reads nothing and returns: `Watched { model: None, picked_by: Some(_), frames_read: 0 }`. It was an error.
 
+## v3.9.0
+
+- **New**: (dep `jiff`) every answered `Client` call appends a line to `$XDG_DATA_HOME/ask_llm/usage/<argv[0] stem>/<YYYY-MM>.jsonl`: requested `Model`, answering deployment, thinking, `cost_cents`, token counts by cache tier, duration and overhead. See `docs/ARCHITECTURE.md#usage-log`.
+- Claude's `cost_cents` stays the CLI's `total_cost_usd`, which is notional under a subscription.
+
 ---
 
 ## v2.1.x and earlier
