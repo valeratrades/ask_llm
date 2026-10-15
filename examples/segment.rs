@@ -13,11 +13,6 @@ const FPS: u32 = 30;
 const FRAMES: u32 = 4 * FPS;
 const SIDE: u32 = 120;
 
-/// top-left of the square on frame `n`
-fn square(n: u32) -> (u32, u32) {
-	(100 + n * 200 / FPS, 300)
-}
-
 #[tokio::main]
 async fn main() -> color_eyre::Result<()> {
 	color_eyre::install()?;
@@ -65,6 +60,11 @@ async fn main() -> color_eyre::Result<()> {
 		assert!(iou > 0.8, "frame {n}: IoU {iou:.2}");
 	}
 	Ok(())
+}
+
+/// top-left of the square on frame `n`
+fn square(n: u32) -> (u32, u32) {
+	(100 + n * 200 / FPS, 300)
 }
 
 fn square_over_noise(out: &Path) {
