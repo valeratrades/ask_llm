@@ -145,7 +145,7 @@ Anthropic backend rewritten against the current API — the previous request sha
 - **New**: (dep `jiff`) every answered `Client` call appends a line to `$XDG_DATA_HOME/ask_llm/usage/<argv[0] stem>/<YYYY-MM>.jsonl`: requested `Model`, answering deployment, thinking, `cost_cents`, token counts by cache tier, duration and overhead. See `docs/ARCHITECTURE.md#usage-log`.
 - Claude's `cost_cents` stays the CLI's `total_cost_usd`, which is notional under a subscription.
 
-## v3.10.0
+### v3.9.1
 
 - **New**: `segment::segment`: an mp4 and a text prompt (plus optional frame-0 clicks) to a grey mask mp4 at the input's size and frame count, on fal SAM 3 / 3.1. Outside the fallback graph, like `video`.
 - **New**: `AppConfig::fal_key`, falling back to `FAL_KEY`.
