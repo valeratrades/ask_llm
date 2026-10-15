@@ -18,8 +18,8 @@ The walk:
 - `Model::next` only goes up in capability. A call is never answered by a weaker model than the one asked for. Nothing checks this mechanically.
 - `Error::Unrecoverable` means no node on the path can answer this call. If any node failed on something that clears on its own, the call is `Error::Recoverable`.
 
-## Generation
-`video` (Vertex Veo) sits outside the graph: a generated clip is not interchangeable across models, so the caller names one model and gets it or an error. No walk, no retry.
+## Generation and segmentation
+`video` (Vertex Veo) and `segment` (fal SAM 3) sit outside the graph: a generated clip or a mask is not interchangeable across models, so the caller names one model and gets it or an error. No walk, no retry.
 
 ## Usage log
 Every call `Client` answers appends one JSON line to `$XDG_DATA_HOME/ask_llm/usage/<app>/<YYYY-MM>.jsonl`; failed calls are not logged. `<app>` is the file stem of `argv[0]`, not of `current_exe()`: a `nix-run-cached` script is exec'd from a content-hashed binary with `argv[0]` set to the script path, so its stem is the script name. `requested` is the `Model` asked for, `model` the deployment that answered.

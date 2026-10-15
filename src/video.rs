@@ -7,7 +7,7 @@ use eyre::{Result, bail, eyre};
 use gcp_auth::TokenProvider as _;
 use serde_json::{Value, json};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, missing};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Model {
@@ -119,7 +119,6 @@ const POLL: Duration = Duration::from_secs(10);
 
 /// One mp4. Billed per second of output; nothing is retried, and the API's own error comes back verbatim.
 pub async fn generate(req: &Request, config: &AppConfig) -> Result<Vec<u8>> {
-	let missing = |field: &str, env: &str| eyre!("put `{field}` in ~/.config/ask_llm.nix, set it on the `AppConfig` passed in, or export {env}");
 	let credentials = config
 		.google_credentials
 		.clone()

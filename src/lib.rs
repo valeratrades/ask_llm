@@ -109,6 +109,7 @@ impl Client {
 }
 
 pub mod config;
+pub mod segment;
 mod shortcuts;
 mod transcribe;
 pub mod tts;

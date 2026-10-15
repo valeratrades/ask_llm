@@ -87,3 +87,7 @@ path = "examples/watch.rs"
 [[example]]
 name = "video"
 path = "examples/video.rs"
+
+[[example]]
+name = "segment"
+path = "examples/segment.rs"

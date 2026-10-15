@@ -15,4 +15,10 @@ pub struct AppConfig {
 	pub google_credentials: Option<PathBuf>,
 	/// Vertex region, eg `us-central1`.
 	pub google_location: Option<String>,
+	/// For [`segment`](crate::segment).
+	pub fal_key: Option<String>,
+}
+
+pub(crate) fn missing(field: &str, env: &str) -> eyre::Report {
+	eyre::eyre!("put `{field}` in ~/.config/ask_llm.nix, set it on the `AppConfig` passed in, or export {env}")
 }
