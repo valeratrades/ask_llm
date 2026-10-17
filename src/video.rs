@@ -3,7 +3,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
-use eyre::{Result, bail, eyre};
+use eyre::{Result, bail, ensure, eyre};
 use gcp_auth::TokenProvider as _;
 use serde_json::{Value, json};
 
@@ -60,7 +60,7 @@ pub enum Input {
 		first: Image,
 		last: Option<Image>,
 	},
-	/// `video` is an mp4; the mask has its aspect ratio.
+	/// `video` is an mp4; the mask has its aspect ratio. Only Veo 2 took it, and Veo 2 is retired: [`edit`] instead.
 	Edit {
 		video: Vec<u8>,
 		mask: Image,
@@ -117,8 +117,50 @@ pub enum Resolution {
 
 const POLL: Duration = Duration::from_secs(10);
 
-/// One mp4. Billed per second of output; nothing is retried, and the API's own error comes back verbatim.
-pub async fn generate(req: &Request, config: &AppConfig) -> Result<Vec<u8>> {
+/// Vertex's Gemini Omni Flash: since Veo 2's retirement, the one Google model that re-makes given footage.
+pub const EDIT_MODEL: &str = "gemini-omni-1.1-flash-preview";
+
+/// `video`, an mp4 of at most 10 s, re-made with `instruction` applied: the same length, at 24 fps. Billed per second of
+/// output; nothing is retried, and the API's own error comes back verbatim.
+pub async fn edit(video: &[u8], instruction: &str, aspect: Aspect, resolution: Resolution, config: &AppConfig) -> Result<Vec<u8>> {
+	let (token, project, _) = vertex(config).await?;
+	let body = json!({
+		"model": EDIT_MODEL,
+		"input": [
+			{ "type": "video", "mime_type": "video/mp4", "data": B64.encode(video) },
+			{ "type": "text", "text": instruction },
+		],
+		"response_format": { "type": "video", "resolution": resolution.to_string(), "aspect_ratio": aspect.to_string() },
+	});
+	tracing::info!(model = EDIT_MODEL, "omni edit");
+	let response = reqwest::Client::new()
+		.post(format!("https://aiplatform.googleapis.com/v1beta1/projects/{project}/locations/global/interactions"))
+		.bearer_auth(token.as_str())
+		.json(&body)
+		.send()
+		.await?;
+	let status = response.status();
+	let text = response.text().await?;
+	ensure!(status.is_success(), "vertex {EDIT_MODEL} {status}: {text}");
+	let done: Value = serde_json::from_str(&text)?;
+	let video = done["steps"]
+		.as_array()
+		.into_iter()
+		.flatten()
+		.flat_map(|step| step["content"].as_array().into_iter().flatten())
+		.find(|c| c["type"] == "video")
+		.and_then(|c| c["data"].as_str())
+		.ok_or_else(|| {
+			eyre!(
+				"{EDIT_MODEL} finished without an inline video; its steps were {:?}",
+				done["steps"].as_array().map(|s| s.iter().map(|s| &s["type"]).collect::<Vec<_>>())
+			)
+		})?;
+	Ok(B64.decode(video)?)
+}
+
+/// A token for the service account, its project and the configured location.
+async fn vertex(config: &AppConfig) -> Result<(std::sync::Arc<gcp_auth::Token>, String, String)> {
 	let credentials = config
 		.google_credentials
 		.clone()
@@ -132,7 +174,12 @@ pub async fn generate(req: &Request, config: &AppConfig) -> Result<Vec<u8>> {
 	let account = gcp_auth::CustomServiceAccount::from_file(&credentials).map_err(|e| eyre!("{}: {e}", credentials.display()))?;
 	let project = account.project_id().ok_or_else(|| eyre!("{} names no project_id", credentials.display()))?.to_owned();
 	let token = account.token(&["https://www.googleapis.com/auth/cloud-platform"]).await?;
+	Ok((token, project, location))
+}
 
+/// One mp4. Billed per second of output; nothing is retried, and the API's own error comes back verbatim.
+pub async fn generate(req: &Request, config: &AppConfig) -> Result<Vec<u8>> {
+	let (token, project, location) = vertex(config).await?;
 	let base = format!(
 		"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{}",
 		req.model.id()
