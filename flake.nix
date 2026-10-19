@@ -1,4 +1,9 @@
 {
+  # the unfree CUDA libraries packages.sam2 takes, which cache.nixos.org does not hold
+  nixConfig = {
+    extra-substituters = [ "https://cache.nixos-cuda.org" ];
+    extra-trusted-public-keys = [ "cache.nixos-cuda.org:74DUi4Ye579gUqzH4ziL9IyiJBlDpMRn9MBN8oNan9M=" ];
+  };
   inputs = {
     v_flakes.url = "github:valeratrades/v_flakes?ref=v1.6";
   };
