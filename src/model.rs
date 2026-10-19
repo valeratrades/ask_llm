@@ -11,6 +11,7 @@ use crate::{
 		ollama,
 		openai::{self, OpenAiModel},
 	},
+	segment,
 };
 
 #[non_exhaustive]
@@ -20,6 +21,11 @@ pub enum Provider {
 	#[display("OpenAI")]
 	OpenAi,
 	Claude,
+	#[display("fal")]
+	Fal,
+	/// this machine's GPU
+	#[display("local")]
+	Local,
 }
 
 #[non_exhaustive]
@@ -34,6 +40,11 @@ pub enum Model {
 	Translate,
 	/// Reads frames, for [`Client::watch`](crate::Client::watch).
 	Video,
+	/// The best mask a provider makes, for [`segment`](crate::segment::segment) only: `segment::Model::try_from`.
+	Segment,
+	/// The best mask made on this machine, as [`Model::Segment`].
+	#[from_str(rename_all = "kebab-case")]
+	SegmentLocal,
 }
 impl Model {
 	/// The fallback edge. Never points to a weaker model.
@@ -44,7 +55,7 @@ impl Model {
 			Self::Fast | Self::Video => Some(Self::Medium),
 			Self::Medium => Some(Self::Slow),
 			Self::Slow => Some(Self::PriceInsensitive),
-			Self::PriceInsensitive => None,
+			Self::PriceInsensitive | Self::Segment | Self::SegmentLocal => None,
 		}
 	}
 
@@ -55,6 +66,8 @@ impl Model {
 			Self::Fast | Self::Video => Deployment::OpenAi(OpenAiModel::Luna),
 			Self::Medium | Self::Slow => Deployment::Claude(ClaudeModel::Opus5_5),
 			Self::PriceInsensitive => Deployment::Claude(ClaudeModel::Fable5_1),
+			Self::Segment => Deployment::Segment(segment::Model::Sam3_1),
+			Self::SegmentLocal => Deployment::Segment(segment::Model::Sam2_1),
 		}
 	}
 
@@ -76,7 +89,21 @@ impl Model {
 				oauth_token: config.claude_token.clone().or_else(|| std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok()),
 				model,
 			}),
+			Deployment::Segment(model) => {
+				return Err(Unrecoverable::new_unsupported("a conversation", format!("{} makes masks, through `segment::segment`", model.id())).into());
+			}
 		})
+	}
+}
+
+impl TryFrom<Model> for segment::Model {
+	type Error = eyre::Report;
+
+	fn try_from(model: Model) -> eyre::Result<Self> {
+		match model.deployment() {
+			Deployment::Segment(m) => Ok(m),
+			_ => eyre::bail!("{model:?} makes no masks; `Segment` and `SegmentLocal` (`segment`, `segment-local`) do"),
+		}
 	}
 }
 
@@ -85,6 +112,7 @@ enum Deployment {
 	Ollama(&'static str),
 	OpenAi(OpenAiModel),
 	Claude(ClaudeModel),
+	Segment(segment::Model),
 }
 impl Deployment {
 	const fn provider(&self) -> Provider {
@@ -92,6 +120,7 @@ impl Deployment {
 			Self::Ollama(_) => Provider::Ollama,
 			Self::OpenAi(_) => Provider::OpenAi,
 			Self::Claude(_) => Provider::Claude,
+			Self::Segment(model) => model.provider(),
 		}
 	}
 
@@ -100,6 +129,7 @@ impl Deployment {
 			Self::Ollama(name) => name,
 			Self::OpenAi(model) => model.to_str(),
 			Self::Claude(model) => model.to_str(),
+			Self::Segment(model) => model.id(),
 		}
 	}
 }

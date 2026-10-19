@@ -160,7 +160,7 @@ pub async fn edit(video: &[u8], instruction: &str, aspect: Aspect, resolution: R
 }
 
 /// A token for the service account, its project and the configured location.
-async fn vertex(config: &AppConfig) -> Result<(std::sync::Arc<gcp_auth::Token>, String, String)> {
+pub(crate) async fn vertex(config: &AppConfig) -> Result<(std::sync::Arc<gcp_auth::Token>, String, String)> {
 	let credentials = config
 		.google_credentials
 		.clone()

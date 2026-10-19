@@ -33,6 +33,27 @@
           badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
         };
         combined = v_flakes.utils.combine { inherit rust; modules = [ github readme rs ]; };
+        # `segment::Model::Sam2_1`'s runner: a python with SAM 2 on CUDA torch, and the pinned weights it names
+        sam2 =
+          let
+            cuda = import v_flakes.default_nixpkgs {
+              inherit system;
+              config.allowUnfree = true;
+              # torch-bin 2.12 is built against CUDA 13
+              overlays = [ (_: prev: { cudaPackages = prev.cudaPackages_13; }) ];
+            };
+            python = (cuda.python3.override {
+              packageOverrides = _: prev: { torch = prev.torch-bin; torchvision = prev.torchvision-bin; };
+            }).withPackages (ps: with ps; [ sam2 opencv4 numpy ]);
+            weights = pkgs.fetchurl {
+              url = "https://huggingface.co/facebook/sam2.1-hiera-large/resolve/665f8e2ad61cf5f53d65644ff27c8ee525124610/sam2.1_hiera_large.pt";
+              hash = "sha256-JkeHjV36UJjy+GSYJXOKk0VXK64tQ1CiRoWH7OR90xg=";
+            };
+          in
+          pkgs.writeShellScriptBin "ask_llm-sam2" ''
+            export SAM2_CONFIG=configs/sam2.1/sam2.1_hiera_l.yaml SAM2_CHECKPOINT=${weights}
+            exec ${python}/bin/python "$@"
+          '';
       in
       {
         packages =
@@ -44,6 +65,7 @@
             };
           in
           {
+            inherit sam2;
             default = rustPlatform.buildRustPackage {
               inherit pname;
               version = manifest.version;

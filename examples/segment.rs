@@ -1,5 +1,6 @@
-//! ≈$0.04 a run: 4s at 30fps through SAM 3. A green square crosses noise; its mask must sit where it is, frame for
-//! frame. Prints the mask's path.
+//! `cargo r --example segment -- <sam-3|sam-3-1|sam-2-1>`: ≈$0.04 a run on fal SAM 3, under a cent of Gemini seeding on
+//! local SAM 2 (`nix shell .#sam2`). 4s at 30fps: a green square crosses noise; its mask must sit where it is, frame for
+//! frame. Prints the mask's path and what it cost.
 use std::{path::Path, process::Command};
 
 use ask_llm::{
@@ -19,15 +20,17 @@ async fn main() -> color_eyre::Result<()> {
 	let dir = tempfile::tempdir()?;
 	let clip = dir.path().join("clip.mp4");
 	square_over_noise(&clip);
+	let model = std::env::args().nth(1).expect("usage: segment <model>, eg sam-2-1");
 	let req = Request {
-		model: Model::Sam3,
+		model: serde_json::from_value::<Model>(serde_json::Value::String(model))?,
 		video: std::fs::read(&clip)?,
 		prompt: "green square".into(),
 		points: vec![],
 	};
 	let mask = std::env::temp_dir().join("ask_llm_segment.mp4");
-	std::fs::write(&mask, segment::segment(&req, &AppConfig::default()).await?)?;
-	println!("{}", mask.display());
+	let made = segment::segment(&req, &AppConfig::default()).await?;
+	std::fs::write(&mask, made.video)?;
+	println!("{} {:?}", mask.display(), made.bill);
 
 	let raw = Command::new("ffmpeg")
 		.args(["-v", "error", "-i"])

@@ -150,6 +150,12 @@ Anthropic backend rewritten against the current API — the previous request sha
 - **New**: `segment::segment`: an mp4 and a text prompt (plus optional frame-0 clicks) to a grey mask mp4 at the input's size and frame count, on fal SAM 3 / 3.1. Outside the fallback graph, like `video`.
 - **New**: `AppConfig::fal_key`, falling back to `FAL_KEY`.
 
+## Unreleased
+
+- **Breaking**: `segment::segment` returns `segment::Mask`: the mask mp4 and the `Bill` of the call (vendor, model, USD).
+- **New**: `segment::Model::Sam2_1`, SAM 2.1 Hiera Large on the local GPU through `ask_llm-sam2` (`nix shell .#sam2`: CUDA torch, pinned weights); Gemini 3 Flash boxes each object the prompt names on the frame it shows best, and each is tracked both ways from there. `segment::Model::ALL`, best first; `segment::Model::provider`.
+- **New**: `Model::Segment` (fal SAM 3.1) and `Model::SegmentLocal` (`segment-local`, SAM 2.1): the best mask model of each kind, through `segment::Model::try_from`; outside the graph, and a conversation sent to them is `Unsupported`. `Provider::Fal`, `Provider::Local`.
+
 ---
 
 ## v2.1.x and earlier
