@@ -49,7 +49,7 @@
             };
             python = (cuda.python3.override {
               packageOverrides = _: prev: { torch = prev.torch-bin; torchvision = prev.torchvision-bin; };
-            }).withPackages (ps: with ps; [ sam2 opencv4 numpy ]);
+            }).withPackages (ps: [ ps.sam2 ps.opencv4 ps.numpy ]); # `with ps;` would lose `sam2` to this binding
             weights = pkgs.fetchurl {
               url = "https://huggingface.co/facebook/sam2.1-hiera-large/resolve/665f8e2ad61cf5f53d65644ff27c8ee525124610/sam2.1_hiera_large.pt";
               hash = "sha256-JkeHjV36UJjy+GSYJXOKk0VXK64tQ1CiRoWH7OR90xg=";
