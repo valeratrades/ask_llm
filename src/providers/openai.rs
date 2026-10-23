@@ -3,6 +3,31 @@ use serde_json::json;
 
 use crate::{Backend, ContentPart, Cost, FORCE_JSON_SUFFIX, Failure, FileAttachment, MAX_TOKENS, MessageContent, Provider, Request, Response, ThinkingLevel, Transport, Unrecoverable};
 
+#[derive(Debug, Eq, PartialEq)]
+/// ref: https://platform.openai.com/docs/models
+pub enum OpenAiModel {
+	Luna,
+}
+impl OpenAiModel {
+	pub const fn to_str(&self) -> &'static str {
+		match self {
+			Self::Luna => "gpt-5.6-luna",
+		}
+	}
+
+	/// Short-context rates, ref: https://developers.openai.com/api/docs/pricing
+	pub(crate) fn cost(&self) -> Cost {
+		match self {
+			Self::Luna => Cost {
+				million_input_tokens: 0.2,
+				million_cached_input_tokens: 0.02,
+				million_cache_write_tokens: 0.25,
+				million_output_tokens: 1.2,
+			},
+		}
+	}
+}
+
 pub(crate) struct OpenAi {
 	pub api_key: String,
 	pub model: OpenAiModel,
@@ -101,31 +126,6 @@ impl OpenAi {
 impl Backend for OpenAi {
 	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, Failure>> + Send + 'a>> {
 		Box::pin(self.do_conversation(request))
-	}
-}
-
-#[derive(Debug, Eq, PartialEq)]
-/// ref: https://platform.openai.com/docs/models
-pub(crate) enum OpenAiModel {
-	Luna,
-}
-impl OpenAiModel {
-	pub const fn to_str(&self) -> &'static str {
-		match self {
-			Self::Luna => "gpt-5.6-luna",
-		}
-	}
-
-	/// Short-context rates, ref: https://developers.openai.com/api/docs/pricing
-	pub fn cost(&self) -> Cost {
-		match self {
-			Self::Luna => Cost {
-				million_input_tokens: 0.2,
-				million_cached_input_tokens: 0.02,
-				million_cache_write_tokens: 0.25,
-				million_output_tokens: 1.2,
-			},
-		}
 	}
 }
 

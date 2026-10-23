@@ -4,7 +4,7 @@ use std::{future::Future, path::Path, pin::Pin};
 
 mod error;
 mod model;
-mod providers;
+pub mod providers;
 pub use error::{Attempt, Cli, Error, Exhausted, Failure, Recoverable, Result, Transport, Unrecoverable};
 pub use model::{Model, Provider};
 

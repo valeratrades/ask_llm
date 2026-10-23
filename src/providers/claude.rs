@@ -4,6 +4,25 @@ use tokio::io::AsyncWriteExt as _;
 
 use crate::{Backend, Cli, Conversation, FORCE_JSON_SUFFIX, Failure, FileAttachment, Request, Response, Role, ThinkingLevel, Unrecoverable};
 
+#[derive(Debug, Eq, PartialEq)]
+/// ref: https://docs.claude.com/en/docs/about-claude/models/all-models
+pub enum ClaudeModel {
+	Haiku5_5,
+	Sonnet5_5,
+	Opus5_5,
+	Fable5_1,
+}
+impl ClaudeModel {
+	pub const fn to_str(&self) -> &'static str {
+		match self {
+			ClaudeModel::Haiku5_5 => "claude-haiku-5-5",
+			ClaudeModel::Sonnet5_5 => "claude-sonnet-5-5",
+			ClaudeModel::Opus5_5 => "claude-opus-5-5",
+			ClaudeModel::Fable5_1 => "claude-fable-5-1",
+		}
+	}
+}
+
 pub(crate) struct Claude {
 	/// `None` leaves credential resolution to the CLI, which reads its own keychain entry.
 	pub oauth_token: Option<String>,
@@ -195,25 +214,6 @@ struct CliUsage {
 	cache_read_input_tokens: u32,
 	cache_creation_input_tokens: u32,
 	output_tokens: u32,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-/// ref: https://docs.claude.com/en/docs/about-claude/models/all-models
-pub(crate) enum ClaudeModel {
-	Haiku5_5,
-	Sonnet5_5,
-	Opus5_5,
-	Fable5_1,
-}
-impl ClaudeModel {
-	pub const fn to_str(&self) -> &'static str {
-		match self {
-			ClaudeModel::Haiku5_5 => "claude-haiku-5-5",
-			ClaudeModel::Sonnet5_5 => "claude-sonnet-5-5",
-			ClaudeModel::Opus5_5 => "claude-opus-5-5",
-			ClaudeModel::Fable5_1 => "claude-fable-5-1",
-		}
-	}
 }
 
 #[cfg(test)]
