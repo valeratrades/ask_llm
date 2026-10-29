@@ -131,6 +131,7 @@ pub async fn edit(video: &[u8], instruction: &str, aspect: Aspect, resolution: R
 			{ "type": "text", "text": instruction },
 		],
 		"response_format": { "type": "video", "resolution": resolution.to_string(), "aspect_ratio": aspect.to_string() },
+		"generation_config": { "video_config": { "task": "edit" } }, // unset, Omni guesses the task from the prompt
 	});
 	tracing::info!(model = EDIT_MODEL, "omni edit");
 	let response = reqwest::Client::new()
