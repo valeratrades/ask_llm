@@ -122,7 +122,7 @@ pub const EDIT_MODEL: &str = "gemini-omni-1.1-flash-preview";
 
 /// `video`, an mp4 of at most 10 s, re-made with `instruction` applied: the same length, at 24 fps. Billed per second of
 /// output; nothing is retried, and the API's own error comes back verbatim.
-pub async fn edit(video: &[u8], instruction: &str, aspect: Aspect, resolution: Resolution, config: &AppConfig) -> Result<Vec<u8>> {
+pub async fn edit(video: &[u8], instruction: &str, resolution: Resolution, config: &AppConfig) -> Result<Vec<u8>> {
 	let (token, project, _) = vertex(config).await?;
 	let body = json!({
 		"model": EDIT_MODEL,
@@ -130,7 +130,7 @@ pub async fn edit(video: &[u8], instruction: &str, aspect: Aspect, resolution: R
 			{ "type": "video", "mime_type": "video/mp4", "data": B64.encode(video) },
 			{ "type": "text", "text": instruction },
 		],
-		"response_format": { "type": "video", "resolution": resolution.to_string(), "aspect_ratio": aspect.to_string() },
+		"response_format": { "type": "video", "resolution": resolution.to_string() }, // the edit task keeps the input's aspect, and refuses one given
 		"generation_config": { "video_config": { "task": "edit" } }, // unset, Omni guesses the task from the prompt
 	});
 	tracing::info!(model = EDIT_MODEL, "omni edit");
