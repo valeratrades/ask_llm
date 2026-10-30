@@ -25,6 +25,8 @@ pub enum Model {
 	Veo3_1Lite,
 }
 impl Model {
+	pub const ALL: [Self; 6] = [Self::Veo2, Self::Veo3, Self::Veo3Fast, Self::Veo3_1, Self::Veo3_1Fast, Self::Veo3_1Lite];
+
 	/// Vertex's id; moves as previews go GA, while the variant stays.
 	pub const fn id(self) -> &'static str {
 		match self {
