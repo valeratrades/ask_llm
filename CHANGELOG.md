@@ -162,6 +162,10 @@ Anthropic backend rewritten against the current API — the previous request sha
 - **New**: `providers::claude::accounts`: `Accounts::{home, at, current, rotate, list}`; an `Account` displays as the one label every caller shows. See `docs/ARCHITECTURE.md#claude-accounts`.
 - **New**: hidden `ask_llm dev claude-account <current | rotate N | list [--json]>`, for the `claude` launcher, `cl rotate-acc` and the rate-limit menu.
 
+### v3.11.1
+
+- `Accounts::list` waits 10s for usage, not 3s: the endpoints take 5-7s at times, which left every label stale.
+
 ---
 
 ## v2.1.x and earlier

@@ -241,7 +241,7 @@ async fn login(dir: &Path) -> Result<Login> {
 }
 
 async fn fetch(token: &str) -> Result<Meta> {
-	let client = reqwest::Client::builder().timeout(Duration::from_secs(3)).build()?;
+	let client = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?; // the usage endpoints take 5-7s at times
 	let (usage, profile) = tokio::try_join!(get::<Usage>(&client, "usage", token), get::<Profile>(&client, "profile", token))?;
 	Ok(Meta {
 		email: profile.account.email,
