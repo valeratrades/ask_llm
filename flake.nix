@@ -63,10 +63,11 @@
       {
         packages =
           let
-            rustc = rust;
-            cargo = rust;
+            build_rust = v_flakes.rs.build_nightly system;
             rustPlatform = pkgs.makeRustPlatform {
-              inherit rustc cargo stdenv;
+              rustc = build_rust;
+              cargo = build_rust;
+              inherit stdenv;
             };
           in
           {
@@ -79,6 +80,7 @@
                 openssl.dev
               ];
               nativeBuildInputs = with pkgs; [ pkg-config ];
+              nativeCheckInputs = [ pkgs.cacert ]; # reqwest 0.13 refuses to build a client without system CAs, which the sandbox has none of
               RUSTC_WRAPPER = ""; # .cargo/config.toml sets sccache, absent in the sandbox
 
               cargoLock.lockFile = ./Cargo.lock;
