@@ -156,6 +156,12 @@ Anthropic backend rewritten against the current API — the previous request sha
 - **New**: `segment::Model::Sam2_1`, SAM 2.1 Hiera Large on the local GPU through `ask_llm-sam2` (`nix shell .#sam2`: CUDA torch, pinned weights); Gemini 3 Flash boxes each object the prompt names on the frame it shows best, and each is tracked both ways from there. `segment::Model::ALL`, best first; `segment::Model::provider`.
 - **New**: `Model::Segment` (fal SAM 3.1) and `Model::SegmentLocal` (`segment-local`, SAM 2.1): the best mask model of each kind, through `segment::Model::try_from`; outside the graph, and a conversation sent to them is `Unsupported`. `Provider::Fal`, `Provider::Local`.
 
+## v3.11.0
+
+- **Breaking for setups relying on it**: the Claude backend no longer reads `CLAUDE_CODE_OAUTH_TOKEN`, and strips it from the `claude -p` child. Without `claude_token`, it runs on the account `~/.claude/accounts/current` names (`CLAUDE_SECURESTORAGE_CONFIG_DIR`); with neither, the call fails `MissingToken`.
+- **New**: `providers::claude::accounts`: `Accounts::{home, at, current, rotate, list}`; an `Account` displays as the one label every caller shows. See `docs/ARCHITECTURE.md#claude-accounts`.
+- **New**: hidden `ask_llm dev claude-account <current | rotate N | list [--json]>`, for the `claude` launcher, `cl rotate-acc` and the rate-limit menu.
+
 ---
 
 ## v2.1.x and earlier

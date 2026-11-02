@@ -23,3 +23,10 @@ The walk:
 
 ## Usage log
 Every call `Client` answers appends one JSON line to `$XDG_DATA_HOME/ask_llm/usage/<app>/<YYYY-MM>.jsonl`; failed calls are not logged. `<app>` is the file stem of `argv[0]`, not of `current_exe()`: a `nix-run-cached` script is exec'd from a content-hashed binary with `argv[0]` set to the script path, so its stem is the script name. `requested` is the `Model` asked for, `model` the deployment that answered.
+
+## Claude accounts
+The device's Claude logins live in `~/.claude/accounts`, owned by `providers::claude::accounts`: `<name>/.credentials.json` is the login, `<name>/meta.json` the last usage snapshot (fetched only while the access token is unexpired: refreshing another process's token would bypass its lock), and `current` a relative link to the account every claude runs on. `current` is relinked atomically and only by `Accounts::rotate`.
+
+Everything else on the device goes through `ask_llm dev claude-account <current | rotate N | list [--json]>`: the `claude` launcher, `cl rotate-acc` and the rate-limit menu patched into the claude binary. Each patched claude watches `current` and follows it in place, which is the one thing that can't move here: only a process can move itself onto another account. A Claude call without `claude_token` runs `claude -p` on `current`.
+
+Rotation is never a step of the model walk: rotating on a rate limit and asking again would be a retry in place.

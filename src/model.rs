@@ -86,8 +86,14 @@ impl Model {
 				model,
 			}),
 			Deployment::Claude(model) => Box::new(claude::Claude {
-				// not an api key, and optional: the `claude` CLI resolves its own subscription credentials when nothing here overrides them
-				oauth_token: config.claude_token.clone().or_else(|| std::env::var("CLAUDE_CODE_OAUTH_TOKEN").ok()),
+				credentials: match &config.claude_token {
+					Some(token) => claude::Credentials::Token(token.clone()),
+					None => claude::Credentials::Account(claude::accounts::Accounts::home().current().map_err(|e| {
+						Unrecoverable::new_missing_token(format!(
+							"hand a token over with `Client::claude_token(…)` or `claude_token` in ~/.config/ask_llm.nix, or log in an account under ~/.claude/accounts ({e:#})"
+						))
+					})?),
+				},
 				model,
 			}),
 			Deployment::Segment(model) => {

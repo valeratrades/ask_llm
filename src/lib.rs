@@ -9,7 +9,7 @@ pub use error::{Attempt, Cli, Error, Exhausted, Failure, Recoverable, Result, Tr
 pub use model::{Model, Provider};
 
 impl Client {
-	/// Keys absent from `config` are looked up in the environment when the request is made.
+	/// Keys absent from `config` are looked up when the request is made: in the environment, except Claude's (see [`config::AppConfig::claude_token`]).
 	pub fn new(config: config::AppConfig) -> Self {
 		Self {
 			config,
@@ -27,6 +27,7 @@ impl Client {
 		self
 	}
 
+	/// Overrides the device's current Claude account.
 	pub fn claude_token(mut self, token: impl Into<String>) -> Self {
 		self.config.claude_token = Some(token.into());
 		self

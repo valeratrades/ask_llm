@@ -3,12 +3,15 @@ use std::path::PathBuf;
 use ask_llm::{
 	Client, Footage, Model, Pick, Watch,
 	config::{AppConfig, SettingsFlags},
+	providers::claude::accounts::Accounts,
 };
-use clap::{Parser, ValueEnum};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about, long_about = None, subcommand_negates_reqs = true)]
 struct Cli {
+	#[command(subcommand)]
+	dev: Option<Dev>,
 	#[clap(required_unless_present_any = ["transcribe", "watch"])]
 	question: Option<String>,
 	/// Transcribe an audio file locally instead of asking a question
@@ -39,12 +42,41 @@ struct Cli {
 	settings: SettingsFlags,
 }
 
+#[derive(Debug, Subcommand)]
+enum Dev {
+	/// Machine plumbing for other tools on this device
+	#[command(hide = true, subcommand)]
+	Dev(DevCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum DevCommand {
+	/// The device's Claude logins, `~/.claude/accounts`
+	#[command(subcommand)]
+	ClaudeAccount(ClaudeAccount),
+}
+#[derive(Debug, Subcommand)]
+enum ClaudeAccount {
+	/// Resolved dir of the account every claude runs on
+	Current,
+	/// Point `current` at another account; running claudes follow it
+	Rotate { name: String },
+	/// `name\tlabel` per account, `*` on the current one; `--json`: one object per line
+	List {
+		#[clap(long)]
+		json: bool,
+	},
+}
 /// [miette::Report] rather than a `.unwrap()`: a `thiserror` enum unwraps into its `Debug`, which drops the
 /// `help` naming the fix.
 #[tokio::main]
 async fn main() -> miette::Result<()> {
-	v_utils::clientside!();
 	let cli = Cli::parse();
+	// before `clientside!`, whose logs go to stdout, which these are read from
+	if let Some(Dev::Dev(DevCommand::ClaudeAccount(command))) = cli.dev {
+		return claude_account(command).await.map_err(|e| miette::miette!("{e:?}"));
+	}
+	v_utils::clientside!();
 
 	if let Some(audio) = cli.transcribe {
 		println!("{}", ask_llm::transcribe(audio).await.unwrap());
@@ -95,6 +127,28 @@ async fn main() -> miette::Result<()> {
 	let answer: String = client.ask(cli.question.expect("clap requires it unless --transcribe or --watch")).await?.text;
 
 	println!("{answer:#}");
+	Ok(())
+}
+async fn claude_account(command: ClaudeAccount) -> eyre::Result<()> {
+	let accounts = Accounts::home();
+	match command {
+		ClaudeAccount::Current => println!("{}", accounts.current()?.display()),
+		ClaudeAccount::Rotate { name } =>
+			if !accounts.rotate(&name)?.logged_in {
+				eprintln!("account {name} has no login yet: running claudes stay where they are; /login in a new one adds it");
+			},
+		ClaudeAccount::List { json } =>
+			for account in accounts.list().await? {
+				if json {
+					println!(
+						"{}",
+						serde_json::json!({ "name": account.name, "dir": account.dir, "current": account.current, "label": account.to_string(), "disabled": account.disabled() })
+					);
+				} else {
+					println!("{}\t{}{account}", account.name, if account.current { "* " } else { "" });
+				}
+			},
+	}
 	Ok(())
 }
 #[derive(Clone, Copy, Debug, ValueEnum)]

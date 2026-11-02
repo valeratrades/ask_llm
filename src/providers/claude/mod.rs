@@ -1,3 +1,7 @@
+pub mod accounts;
+
+use std::path::PathBuf;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt as _;
@@ -24,8 +28,7 @@ impl ClaudeModel {
 }
 
 pub(crate) struct Claude {
-	/// `None` leaves credential resolution to the CLI, which reads its own keychain entry.
-	pub oauth_token: Option<String>,
+	pub credentials: Credentials,
 	pub model: ClaudeModel,
 }
 impl Claude {
@@ -70,9 +73,11 @@ impl Claude {
 		if request.force_json {
 			cmd.args(["--json-schema", r#"{"type":"object"}"#]); // the suffix alone lets prose through before the object
 		}
-		if let Some(token) = &self.oauth_token {
-			cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token);
-		}
+		match &self.credentials {
+			Credentials::Token(token) => cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token),
+			// an inherited token would outrank the account
+			Credentials::Account(dir) => cmd.env_remove("CLAUDE_CODE_OAUTH_TOKEN").env("CLAUDE_SECURESTORAGE_CONFIG_DIR", dir),
+		};
 		if let Some(system) = system {
 			cmd.arg("--system-prompt").arg(system);
 		}
@@ -136,6 +141,12 @@ impl Claude {
 			},
 		})
 	}
+}
+
+pub(crate) enum Credentials {
+	Token(String),
+	/// an [`accounts::Accounts`] dir, which the CLI reads its login from
+	Account(PathBuf),
 }
 
 impl Backend for Claude {

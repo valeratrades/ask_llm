@@ -38,7 +38,7 @@ derive_more = { version = "2.1.1", features = [
 ] }
 eyre = "0.6.12"
 gcp_auth = "0.12.7"
-jiff = "0.2.38"
+jiff = { version = "0.2.38", features = ["serde"] }
 miette = { version = "7.6.0", features = [
     "fancy",
     "syntect-highlighter",
