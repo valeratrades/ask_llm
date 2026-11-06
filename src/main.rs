@@ -142,7 +142,7 @@ async fn claude_account(command: ClaudeAccount) -> eyre::Result<()> {
 				if json {
 					println!(
 						"{}",
-						serde_json::json!({ "name": account.name, "dir": account.dir, "current": account.current, "label": account.to_string(), "disabled": account.disabled() })
+						serde_json::json!({ "name": account.name, "email": account.email(), "dir": account.dir, "current": account.current, "label": account.to_string(), "disabled": account.disabled() })
 					);
 				} else {
 					println!("{}\t{}{account}", account.name, if account.current { "* " } else { "" });

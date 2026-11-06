@@ -80,6 +80,14 @@ pub struct Account {
 	login: Login,
 }
 impl Account {
+	/// from the last usage snapshot; `None` until one was fetched
+	pub fn email(&self) -> Option<&str> {
+		match &self.login {
+			Login::In { snapshot: Some(meta), .. } => Some(&meta.email),
+			_ => None,
+		}
+	}
+
 	/// can't be switched onto: no login, or a window spent per live usage
 	pub fn disabled(&self) -> bool {
 		match &self.login {
