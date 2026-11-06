@@ -57,10 +57,17 @@ enum DevCommand {
 }
 #[derive(Debug, Subcommand)]
 enum ClaudeAccount {
-	/// Resolved dir of the account every claude runs on
+	/// Resolved dir of the account a new claude starts on
 	Current,
-	/// Point `current` at another account; running claudes follow it
-	Rotate { name: String },
+	/// Resolved dir of the account every running claude follows
+	Running,
+	/// Point `current` and `running` at another account: new claudes start on it, running ones move onto it
+	Rotate {
+		name: String,
+		/// Point only `current`: running claudes stay where they are, keeping their prompt caches
+		#[clap(long)]
+		new: bool,
+	},
 	/// `name\tlabel` per account, `*` on the current one; `--json`: one object per line
 	List {
 		#[clap(long)]
@@ -133,10 +140,13 @@ async fn claude_account(command: ClaudeAccount) -> eyre::Result<()> {
 	let accounts = Accounts::home();
 	match command {
 		ClaudeAccount::Current => println!("{}", accounts.current()?.display()),
-		ClaudeAccount::Rotate { name } =>
-			if !accounts.rotate(&name)?.logged_in {
+		ClaudeAccount::Running => println!("{}", accounts.running()?.display()),
+		ClaudeAccount::Rotate { name, new } => {
+			let rotated = if new { accounts.rotate_new(&name)? } else { accounts.rotate(&name)? };
+			if !rotated.logged_in {
 				eprintln!("account {name} has no login yet: running claudes stay where they are; /login in a new one adds it");
-			},
+			}
+		}
 		ClaudeAccount::List { json } =>
 			for account in accounts.list().await? {
 				if json {

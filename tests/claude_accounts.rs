@@ -76,11 +76,25 @@ fn rotate_relinks_to_a_known_account() {
 	assert_eq!(accounts.current().unwrap(), fs::canonicalize(root.path().join("2")).unwrap());
 	assert!(!accounts.rotate("1").unwrap().logged_in);
 
-	for unknown in ["3", "current", "..", "1/"] {
+	for unknown in ["3", "current", "running", "..", "1/"] {
 		assert!(accounts.rotate(unknown).is_err(), "{unknown}");
 	}
 	assert_eq!(fs::read_link(root.path().join("current")).unwrap(), Path::new("1"));
-	assert_eq!(fs::read_dir(root.path()).unwrap().count(), 3, "no temporary link left behind");
+	assert_eq!(fs::read_dir(root.path()).unwrap().count(), 4, "no temporary link left behind");
+}
+
+#[test]
+fn rotate_new_leaves_running_claudes_where_they_are() {
+	let root = store(&[("1", None), ("2", None)], "1");
+	let accounts = Accounts::at(root.path());
+	accounts.rotate("1").unwrap();
+
+	accounts.rotate_new("2").unwrap();
+	assert_eq!(accounts.current().unwrap(), fs::canonicalize(root.path().join("2")).unwrap());
+	assert_eq!(accounts.running().unwrap(), fs::canonicalize(root.path().join("1")).unwrap());
+
+	accounts.rotate("2").unwrap();
+	assert_eq!(accounts.running().unwrap(), fs::canonicalize(root.path().join("2")).unwrap());
 }
 
 #[test]

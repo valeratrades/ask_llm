@@ -21,21 +21,44 @@ impl Accounts {
 		Self { root: root.into() }
 	}
 
+	/// where a new claude starts
 	pub fn current(&self) -> Result<PathBuf> {
-		let link = self.root.join("current");
-		fs::canonicalize(&link).wrap_err_with(|| format!("{} names no account", link.display()))
+		self.resolve("current")
 	}
 
+	/// where every running claude follows
+	pub fn running(&self) -> Result<PathBuf> {
+		self.resolve("running")
+	}
+
+	/// new claudes start on `name`, and running ones move onto it
 	pub fn rotate(&self, name: &str) -> Result<Rotated> {
+		let rotated = self.rotate_new(name)?;
+		self.relink("running", name)?;
+		Ok(rotated)
+	}
+
+	/// new claudes start on `name`; running ones stay where they are
+	pub fn rotate_new(&self, name: &str) -> Result<Rotated> {
 		if !self.names()?.iter().any(|n| n == name) {
 			bail!("no account {name} in {} (mkdir it to add one)", self.root.display());
 		}
-		let tmp = self.root.join(format!("current.{}", std::process::id()));
-		std::os::unix::fs::symlink(name, &tmp)?;
-		fs::rename(&tmp, self.root.join("current"))?;
+		self.relink("current", name)?;
 		Ok(Rotated {
 			logged_in: self.root.join(name).join(".credentials.json").exists(),
 		})
+	}
+
+	fn resolve(&self, link: &str) -> Result<PathBuf> {
+		let link = self.root.join(link);
+		fs::canonicalize(&link).wrap_err_with(|| format!("{} names no account", link.display()))
+	}
+
+	fn relink(&self, link: &str, name: &str) -> Result<()> {
+		let tmp = self.root.join(format!("{link}.{}", std::process::id()));
+		std::os::unix::fs::symlink(name, &tmp)?;
+		fs::rename(&tmp, self.root.join(link))?;
+		Ok(())
 	}
 
 	pub async fn list(&self) -> Result<Vec<Account>> {
