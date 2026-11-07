@@ -102,3 +102,9 @@ fn current_errors_on_a_dangling_link() {
 	let root = store(&[("1", None)], "2");
 	assert!(Accounts::at(root.path()).current().is_err());
 }
+
+#[test]
+fn list_disables_a_spent_account_until_its_reset() {
+	let root = store(&[("1", Some((EXPIRED, meta(100.0, "2999-01-01T00:00:00Z"))))], "1");
+	check_list(root.path(), &[("1", true, &["5h 0% left, resets ", " · as of "], true)]);
+}

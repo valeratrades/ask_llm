@@ -111,15 +111,11 @@ impl Account {
 		}
 	}
 
-	/// can't be switched onto: no login, or a window spent per live usage
+	/// can't be switched onto: no login, or a window last seen spent and not reset since
 	pub fn disabled(&self) -> bool {
 		match &self.login {
 			Login::None => true,
-			Login::In {
-				snapshot: Some(meta),
-				source: Source::Live,
-			} => meta.left(Timestamp::now()).iter().any(|w| w.left <= 0.0 && w.reset.is_some()),
-			Login::In { .. } => false,
+			Login::In { snapshot, .. } => snapshot.iter().flat_map(|m| m.left(Timestamp::now())).any(|w| w.left <= 0.0 && w.reset.is_some()),
 		}
 	}
 }
