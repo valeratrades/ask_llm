@@ -72,8 +72,11 @@ result_large_err = "allow"          # every fallible path is a network or subpro
 # const fns, so actually more performant
 get_first = "allow"
 get_last_with_len = "allow"
+if_not_else = "warn"
+integer_division = "warn"
 
 [lints.rust]
+stable_features = "allow"
 unused_features = "allow"
 
 [lints.cargo]

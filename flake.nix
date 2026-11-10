@@ -26,6 +26,7 @@
         github = v_flakes.github {
           inherit pkgs pname rs;
           enable = true;
+          publishCachix = "valeratrades";
           jobs.default = true;
           jobs.errors.augment = [ "rust-miri" ];
           lastSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
