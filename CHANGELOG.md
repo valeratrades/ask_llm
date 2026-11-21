@@ -166,6 +166,10 @@ Anthropic backend rewritten against the current API — the previous request sha
 
 - `Accounts::list` waits 10s for usage, not 3s: the endpoints take 5-7s at times, which left every label stale.
 
+## v3.12.0
+
+- **Changed**: `Client::watch` reads and keeps frames as webp (`<secs>.webp`), not jpg: smaller, and still a format the model and browsers read. Link a kept frame by `Shown::frame`, not by a guessed name.
+
 ---
 
 ## v2.1.x and earlier

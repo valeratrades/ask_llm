@@ -26,7 +26,7 @@ pub struct Watch {
 	pub pick: Pick,
 	/// Context for picking where to look, never parsed: a video's description, a call's summary.
 	pub about: Option<String>,
-	/// Where each frame an entry cites is kept, as `<secs>.jpg`.
+	/// Where each frame an entry cites is kept, as `<secs>.webp`.
 	pub frames: PathBuf,
 }
 
@@ -172,18 +172,18 @@ impl Client {
 					false => format!("What is said around them, already transcribed:\n\n{around}"),
 				}
 			);
-			let files = batch.iter().map(|(_, jpg)| jpeg(jpg)).collect::<eyre::Result<Vec<_>>>()?;
+			let files = batch.iter().map(|(_, frame)| webp(frame)).collect::<eyre::Result<Vec<_>>>()?;
 			let answer = self.patiently(&prompt, &files, &ENTRIES).await?;
 			watched.cost_cents += answer.cost_cents;
 			watched.model.get_or_insert(answer.model.clone());
 
 			let listed: Answer = serde_json::from_str(&answer.text).map_err(|e| eyre!("{}: the answer is not the json asked for: {e}\n{}", answer.model, answer.text))?;
 			for Entry { t_secs, shown, on_screen_text } in listed.entries {
-				let Some((_, jpg)) = batch.iter().find(|(t, _)| *t == t_secs) else {
+				let Some((_, picked)) = batch.iter().find(|(t, _)| *t == t_secs) else {
 					return Err(eyre!("{}: an entry at {t_secs}s, which is no frame it was shown — {shown}", answer.model).into());
 				};
-				let frame = spec.frames.join(format!("{t_secs}.jpg"));
-				std::fs::copy(jpg, &frame).map_err(|e| eyre!("{}: {e}", frame.display()))?;
+				let frame = spec.frames.join(format!("{t_secs}.webp"));
+				std::fs::copy(picked, &frame).map_err(|e| eyre!("{}: {e}", frame.display()))?;
 				watched.shown.push(Shown {
 					secs: t_secs,
 					shown: shown.trim().to_string(),
@@ -290,11 +290,11 @@ struct Entry {
 	on_screen_text: Option<String>,
 }
 
-fn jpeg(path: &Path) -> eyre::Result<FileAttachment> {
+fn webp(path: &Path) -> eyre::Result<FileAttachment> {
 	let data = std::fs::read(path)?;
 	Ok(FileAttachment {
 		base64_data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data),
-		media_type: "image/jpeg".to_string(),
+		media_type: "image/webp".to_string(),
 	})
 }
 
@@ -333,7 +333,7 @@ async fn duration(media: &Path) -> eyre::Result<f64> {
 	text.trim().parse().map_err(|e| eyre!("ffprobe timed {} as `{}`: {e}", media.display(), text.trim()))
 }
 
-/// `(secs, jpg)` for every frame where the picture changes or `floor` seconds have passed, at least
+/// `(secs, webp)` for every frame where the picture changes or `floor` seconds have passed, at least
 /// `gap` seconds apart, the first frame always among them. Within `span` only, where one is given.
 async fn changes(media: &Path, scratch: &Path, gap: f64, floor: u64, span: Option<(f64, f64)>) -> eyre::Result<Vec<(u64, PathBuf)>> {
 	let mut cmd = Command::new("ffmpeg");
@@ -351,10 +351,12 @@ async fn changes(media: &Path, scratch: &Path, gap: f64, floor: u64, span: Optio
 			&format!("select='eq(n\\,0)+gt(scene\\,{SCENE})+gte(t-prev_selected_t\\,{floor})',showinfo,scale=-2:'min(720\\,ih)',pad=iw:ih+40:0:0:black,drawtext=text='%{{eif\\:t+{from}\\:d}}s':x=10:y=h-32:fontsize=26:fontcolor=white"),
 			"-fps_mode",
 			"passthrough", // `vfr` drops a frame that shares its stamp with the one before, and showinfo still names it
-			"-q:v",
-			"4",
+			"-c:v",
+			"libwebp",
+			"-quality",
+			"80",
 		])
-		.arg(scratch.join("%06d.jpg"))
+		.arg(scratch.join("%06d.webp"))
 		.output()
 		.await?;
 	let log = String::from_utf8_lossy(&out.stderr);
@@ -375,12 +377,12 @@ async fn changes(media: &Path, scratch: &Path, gap: f64, floor: u64, span: Optio
 			.expect("split yields at least once")
 			.parse()
 			.map_err(|e| eyre!("showinfo wrote `{rest}`: {e}"))?;
-		let jpg = scratch.join(format!("{:06}.jpg", i + 1));
-		if !jpg.exists() {
-			bail!("showinfo named a frame ffmpeg did not write: {}", jpg.display());
+		let frame = scratch.join(format!("{:06}.webp", i + 1));
+		if !frame.exists() {
+			bail!("showinfo named a frame ffmpeg did not write: {}", frame.display());
 		}
 		if t - last >= gap {
-			kept.push(((from + t) as u64, jpg));
+			kept.push(((from + t) as u64, frame));
 			last = t;
 		}
 	}
