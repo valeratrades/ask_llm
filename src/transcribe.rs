@@ -99,7 +99,7 @@ fn whisper_model() -> Result<PathBuf> {
 	}
 
 	let dir = PathBuf::from(v_utils::io::xdg::xdg_data_fallback()).join("whisper-cpp/models");
-	let default = dir.join("ggml-base.en.bin");
+	let default = dir.join("ggml-large-v3-turbo-q5_0.bin"); // multilingual: an `.en` model turns other languages into "(speaking in foreign language)"
 	if default.is_file() {
 		return Ok(default);
 	}
@@ -109,7 +109,7 @@ fn whisper_model() -> Result<PathBuf> {
 		Err(_) => Vec::new(),
 	};
 	bail!(
-		"no whisper model at {}. Fetch one with `whisper-cpp-download-ggml-model base.en`, or point $WHISPER_MODEL at it. Present in that directory: {available:?}",
+		"no whisper model at {}. Fetch one with `whisper-cpp-download-ggml-model large-v3-turbo-q5_0`, or point $WHISPER_MODEL at it. Present in that directory: {available:?}",
 		default.display()
 	);
 }
