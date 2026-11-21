@@ -168,6 +168,7 @@ Anthropic backend rewritten against the current API — the previous request sha
 
 ## v3.12.0
 
+- **Changed**: `transcribe` (and `watch`'s speech) defaults to the multilingual `ggml-large-v3-turbo-q5_0.bin`, not `base.en`: an English-only model writes "(speaking in foreign language)" for other languages, or invents English. Fetch it with `whisper-cpp-download-ggml-model large-v3-turbo-q5_0`; `$WHISPER_MODEL` still overrides.
 - **Changed**: `Client::watch` reads and keeps frames as webp (`<secs>.webp`), not jpg: smaller, and still a format the model and browsers read. Link a kept frame by `Shown::frame`, not by a guessed name.
 
 ---
