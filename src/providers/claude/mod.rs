@@ -71,7 +71,9 @@ impl Claude {
 			.env_remove("ANTHROPIC_API_KEY")
 			.env_remove("CLAUDE_TOKEN");
 		if request.force_json {
-			cmd.args(["--json-schema", r#"{"type":"object"}"#]); // the suffix alone lets prose through before the object
+			// the suffix alone lets prose through before the object; an object of untyped fields gets nested lists back json-encoded as strings
+			let schema = request.schema.map_or_else(|| r#"{"type":"object"}"#.to_string(), |s| s.to_string());
+			cmd.args(["--json-schema", &schema]);
 		}
 		match &self.credentials {
 			Credentials::Token(token) => cmd.env("CLAUDE_CODE_OAUTH_TOKEN", token),

@@ -83,16 +83,18 @@ impl Client {
 	}
 
 	pub async fn conversation(&self, conv: &Conversation) -> Result<Response> {
-		self.send(conv, &self.files, self.force_json).await
+		self.send(conv, &self.files, self.force_json, None).await
 	}
 
-	async fn send(&self, conv: &Conversation, files: &[FileAttachment], force_json: bool) -> Result<Response> {
+	/// `schema` is what a forced json answer must match; without one it is held to being an object.
+	async fn send(&self, conv: &Conversation, files: &[FileAttachment], force_json: bool, schema: Option<&serde_json::Value>) -> Result<Response> {
 		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
 		let request = Request {
 			conversation: conv,
 			max_tokens: self.max_tokens,
 			stop_sequences: stop_seqs,
 			force_json,
+			schema,
 			files,
 			thinking: self.thinking,
 		};
@@ -390,6 +392,7 @@ pub(crate) struct Request<'a> {
 	pub max_tokens: Option<usize>,
 	pub stop_sequences: Option<Vec<&'a str>>,
 	pub force_json: bool,
+	pub schema: Option<&'a serde_json::Value>,
 	pub files: &'a [FileAttachment],
 	pub thinking: ThinkingLevel,
 }

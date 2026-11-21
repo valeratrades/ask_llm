@@ -1,5 +1,6 @@
 use std::{
 	path::{Path, PathBuf},
+	sync::LazyLock,
 	time::Duration,
 };
 
@@ -172,7 +173,7 @@ impl Client {
 				}
 			);
 			let files = batch.iter().map(|(_, jpg)| jpeg(jpg)).collect::<eyre::Result<Vec<_>>>()?;
-			let answer = self.patiently(&prompt, &files).await?;
+			let answer = self.patiently(&prompt, &files, &ENTRIES).await?;
 			watched.cost_cents += answer.cost_cents;
 			watched.model.get_or_insert(answer.model.clone());
 
@@ -210,7 +211,7 @@ impl Client {
 			 Answer {{\"spans\": [{{\"from_secs\": <number>, \"to_secs\": <number>, \"why\": <a few words>}}]}}, with 0 ≤ from_secs < to_secs ≤ {duration}; no spans where nothing is.",
 			about.map(|a| format!("\nAbout it:\n\n{}\n", a.trim())).unwrap_or_default(),
 		);
-		let answer = self.clone().model(Model::Fast).patiently(&prompt, &[]).await?;
+		let answer = self.clone().model(Model::Fast).patiently(&prompt, &[], &SPANS).await?;
 		let listed: Spans = serde_json::from_str(&answer.text).map_err(|e| eyre!("{}: the answer is not the json asked for: {e}\n{}", answer.model, answer.text))?;
 		let mut spans: Vec<(f64, f64)> = Vec::new();
 		for Span { from_secs, to_secs, why } in listed.spans {
@@ -232,12 +233,12 @@ impl Client {
 	}
 
 	/// A read of many requests must not lose what it already spent to one 429, so a recoverable failure is waited out.
-	async fn patiently(&self, prompt: &str, files: &[FileAttachment]) -> Result<crate::Response> {
+	async fn patiently(&self, prompt: &str, files: &[FileAttachment], schema: &serde_json::Value) -> Result<crate::Response> {
 		let mut conv = Conversation::new();
 		conv.add(Role::User, prompt);
 		//LOOP: bounded by the attempts
 		for attempt in 1..=ATTEMPTS {
-			let wait = match self.send(&conv, files, true).await {
+			let wait = match self.send(&conv, files, true, Some(schema)).await {
 				Err(Error::Recoverable(exhausted)) if attempt < ATTEMPTS => exhausted
 					.attempts
 					.iter()
@@ -255,6 +256,12 @@ impl Client {
 	}
 }
 
+static SPANS: LazyLock<serde_json::Value> = LazyLock::new(|| {
+	serde_json::json!({ "type": "object", "required": ["spans"], "properties": { "spans": { "type": "array", "items": {
+		"type": "object", "required": ["from_secs", "to_secs", "why"],
+		"properties": { "from_secs": { "type": "number" }, "to_secs": { "type": "number" }, "why": { "type": "string" } },
+	}}}})
+});
 #[derive(serde::Deserialize)]
 struct Spans {
 	spans: Vec<Span>,
@@ -266,6 +273,12 @@ struct Span {
 	why: String,
 }
 
+static ENTRIES: LazyLock<serde_json::Value> = LazyLock::new(|| {
+	serde_json::json!({ "type": "object", "required": ["entries"], "properties": { "entries": { "type": "array", "items": {
+		"type": "object", "required": ["t_secs", "shown"],
+		"properties": { "t_secs": { "type": "integer" }, "shown": { "type": "string" }, "on_screen_text": { "type": "string" } },
+	}}}})
+});
 #[derive(serde::Deserialize)]
 struct Answer {
 	entries: Vec<Entry>,
