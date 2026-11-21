@@ -65,7 +65,8 @@ async fn reads_nothing_where_the_speech_shows_nothing() {
 		"nothing was said to be shown, and frames were read: {:#?}",
 		watched.shown
 	);
-	assert!(watched.picked_by.is_some() && watched.cost_cents > 0., "the pick itself is a request");
+	assert!(watched.picked_by.is_some(), "the pick itself is a request");
+	assert!(watched.cost_cents > 0., "the pick itself is a request");
 }
 
 /// `secs` of `INVOICE 4417`, then `secs` of `REFUND 9203`, with no audio.
