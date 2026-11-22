@@ -219,6 +219,7 @@ mod tests {
 	}
 
 	async fn transport_failure() -> Failure {
+		let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
 		let source = reqwest::Client::new().get("http://127.0.0.1:1").send().await.expect_err("nothing listens on port 1");
 		Transport::classify(Provider::Ollama, source).into()
 	}

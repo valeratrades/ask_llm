@@ -85,6 +85,7 @@ impl OpenAi {
 		tracing::debug!(?payload);
 
 		let ttfb_start = std::time::Instant::now();
+		let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
 		let http_response = reqwest::Client::new()
 			.post("https://api.openai.com/v1/chat/completions")
 			.bearer_auth(&self.api_key)

@@ -128,6 +128,7 @@ pub async fn segment(req: &Request, config: &AppConfig) -> Result<Mask> {
 /// Billed per 16 frames.
 async fn fal(req: &Request, config: &AppConfig, raw: &Path, frames: u32) -> Result<Bill> {
 	let key = config.fal_key.clone().or_else(|| std::env::var("FAL_KEY").ok()).ok_or_else(|| missing("fal_key", "FAL_KEY"))?;
+	let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
 	let http = reqwest::Client::new();
 	let auth = format!("Key {key}");
 	let call = async |request: reqwest::RequestBuilder| -> Result<Value> {
@@ -262,6 +263,7 @@ async fn seed(prompt: &str, frames: &Path, (w, h, n): (u32, u32, u32), config: &
 		"generationConfig": { "responseMimeType": "application/json", "responseSchema": schema },
 	});
 	// v1beta1: per-part mediaResolution
+	let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
 	let response = reqwest::Client::new()
 		.post(format!(
 			"https://aiplatform.googleapis.com/v1beta1/projects/{project}/locations/global/publishers/google/models/{SEEDER}:generateContent"

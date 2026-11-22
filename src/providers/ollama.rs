@@ -52,6 +52,7 @@ impl Ollama {
 			ollama_request.options.stop = Some(seqs.iter().map(|s| s.to_string()).collect());
 		}
 
+		let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
 		let response = reqwest::Client::new()
 			.post(&self.url)
 			.json(&ollama_request)

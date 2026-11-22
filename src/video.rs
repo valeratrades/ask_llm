@@ -136,6 +136,7 @@ pub async fn edit(video: &[u8], instruction: &str, resolution: Resolution, confi
 		"generation_config": { "video_config": { "task": "edit" } }, // unset, Omni guesses the task from the prompt
 	});
 	tracing::info!(model = EDIT_MODEL, "omni edit");
+	let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
 	let response = reqwest::Client::new()
 		.post(format!("https://aiplatform.googleapis.com/v1beta1/projects/{project}/locations/global/interactions"))
 		.bearer_auth(token.as_str())
@@ -187,6 +188,7 @@ pub async fn generate(req: &Request, config: &AppConfig) -> Result<Vec<u8>> {
 		"https://{location}-aiplatform.googleapis.com/v1/projects/{project}/locations/{location}/publishers/google/models/{}",
 		req.model.id()
 	);
+	let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
 	let http = reqwest::Client::new();
 	let call = async |url: String, body: Value| -> Result<Value> {
 		let response = http.post(url).bearer_auth(token.as_str()).json(&body).send().await?;
