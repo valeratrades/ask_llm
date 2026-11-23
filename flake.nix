@@ -23,17 +23,18 @@
         rs = v_flakes.rs {
           inherit pkgs rust;
         };
+        oldestSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
         github = v_flakes.github {
           inherit pkgs pname rs;
           enable = true;
           publishCachix = "valeratrades";
           jobs.default = true;
           jobs.errors.augment = [ "rust-miri" ];
-          lastSupportedVersion = "nightly-${v_flakes.rs.nightly_version}";
+          inherit oldestSupportedVersion;
         };
         readme = v_flakes.readme-fw {
           inherit pkgs pname;
-          lastSupportedVersion = "nightly-1.86";
+          inherit oldestSupportedVersion;
           rootDir = ./.;
           defaults = true;
           badges = [ "msrv" "crates_io" "docs_rs" "loc" "ci" ];
