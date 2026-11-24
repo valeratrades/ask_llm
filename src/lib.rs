@@ -22,6 +22,7 @@ impl Client {
 			max_tokens: None,
 			stop_sequences: None,
 			force_json: false,
+			logged: true,
 			schema: None,
 			files: Vec::new(),
 			thinking: ThinkingLevel::default(),
@@ -88,6 +89,12 @@ impl Client {
 		self
 	}
 
+	/// No usage log: for a server, which counts its own uses and has nowhere to write it.
+	pub fn unlogged(mut self) -> Self {
+		self.logged = false;
+		self
+	}
+
 	pub fn thinking(mut self, level: ThinkingLevel) -> Self {
 		self.thinking = level;
 		self
@@ -129,8 +136,14 @@ impl Client {
 			}
 		})
 		.await?;
-		usage::log(&self.path.requested(), &walked.answer);
+		self.log(&walked.answer);
 		Ok(walked.answer)
+	}
+
+	fn log(&self, response: &Response) {
+		if self.logged {
+			usage::log(&self.path.requested(), response);
+		}
 	}
 
 	fn request<'a>(&'a self, conversation: &'a Conversation) -> Request<'a> {
@@ -138,7 +151,7 @@ impl Client {
 			conversation,
 			rounds: &[],
 			tools: &[],
-			agentic: false,
+			step: false,
 			max_tokens: self.max_tokens,
 			stop_sequences: self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect()),
 			json: self.json(),
@@ -204,9 +217,18 @@ impl Response {
 		}
 	}
 
-	/// The answer to a [`Client::json_schema`] or a [`Client::force_json`].
+	/// The answer to a [`Client::json_schema`] or a [`Client::force_json`]. The error quotes none of it: it is in `text`.
 	pub fn json<T: serde::de::DeserializeOwned>(&self) -> eyre::Result<T> {
-		serde_json::from_str(&self.text).map_err(|e| eyre::eyre!("{}, stopped for {:?}: the answer is not the json asked for: {e}\n{}", self.model, self.stop, self.text))
+		serde_json::from_str(&self.text).map_err(|e| {
+			let cut = if matches!(self.stop, Stop::MaxTokens) { ", cut at the token cap," } else { "" };
+			eyre::eyre!(
+				"{}: the answer{cut} is not the json asked for: {:?} error at {}:{}",
+				self.model,
+				e.classify(),
+				e.line(),
+				e.column()
+			)
+		})
 	}
 
 	/// Extract codeblocks with optional extension filtering.
@@ -405,6 +427,7 @@ pub struct Client {
 	max_tokens: Option<usize>,
 	stop_sequences: Option<Vec<String>>,
 	force_json: bool,
+	logged: bool,
 	schema: Option<serde_json::Value>,
 	files: Vec<FileAttachment>,
 	thinking: ThinkingLevel,
@@ -432,8 +455,8 @@ pub(crate) struct Request<'a> {
 	/// Answered tool calls, after the conversation.
 	pub rounds: &'a [std::sync::Arc<wire::Round>],
 	pub tools: &'a [Tool],
-	/// More rounds may follow on the same prefix.
-	pub agentic: bool,
+	/// Whose refusal is told as an answer, which the CLI has no way to.
+	pub step: bool,
 	pub max_tokens: Option<usize>,
 	pub stop_sequences: Option<Vec<&'a str>>,
 	pub json: Json<'a>,

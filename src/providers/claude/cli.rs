@@ -11,7 +11,7 @@ use crate::{Cli, ContentPart, Conversation, FORCE_JSON_SUFFIX, Failure, Json, Re
 
 /// Whether the CLI has a way to ask it.
 pub(super) fn says(request: &Request<'_>) -> bool {
-	!request.agentic && request.stop_sequences.is_none() && request.conversation.0.iter().all(|m| m.content.parts().iter().all(|p| matches!(p, ContentPart::Text(_))))
+	!request.step && request.stop_sequences.is_none() && request.conversation.0.iter().all(|m| m.content.parts().iter().all(|p| matches!(p, ContentPart::Text(_))))
 }
 
 /// `account` is an [`Accounts`](super::accounts::Accounts) dir, which the CLI reads its login from.

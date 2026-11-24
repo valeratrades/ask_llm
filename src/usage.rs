@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::{
 	Provider, Response,
@@ -47,7 +47,14 @@ pub(crate) fn log(requested: &str, response: &Response) {
 	let argv0 = std::env::args_os().next().expect("every process is started with argv[0]");
 	let app = Path::new(&argv0).file_stem().expect("argv[0] names a file").to_string_lossy().into_owned();
 	let now = jiff::Timestamp::now();
-	let dir = Path::new(&v_utils::io::xdg::xdg_data_fallback()).join("ask_llm/usage").join(app);
+	let Some(home) = std::env::var_os("XDG_DATA_HOME")
+		.map(PathBuf::from)
+		.or_else(|| std::env::var_os("HOME").map(|home| Path::new(&home).join(".local/share")))
+	else {
+		tracing::error!("the usage log is not written: neither XDG_DATA_HOME nor HOME is set");
+		return;
+	};
+	let dir = home.join("ask_llm/usage").join(app);
 	let usage = response.usage;
 	let mut line = serde_json::json!({
 		"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),

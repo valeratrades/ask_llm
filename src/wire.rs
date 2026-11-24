@@ -124,7 +124,7 @@ fn failure(provider: Provider, error: genai::Error) -> Failure {
 			webc::Error::ResponseFailedNotJson { content_type, body } => schema(format!("`{content_type}` where json was asked for"), body),
 			e @ webc::Error::JsonValueExt(_) => schema(e.to_string(), String::new()),
 		},
-		genai::Error::ChatResponseGeneration { response_body, cause, .. } => schema(cause, response_body.to_string()),
+		genai::Error::ChatResponseGeneration { response_body, cause, .. } => schema("genai could not read it".to_string(), format!("{cause}\n{response_body}")), // the cause may quote it
 		e => Unrecoverable::new_unsupported("this request", e.to_string()).into(),
 	}
 }
@@ -150,10 +150,10 @@ pub(crate) fn answer(source: &Source, request: &Request<'_>, chat: ChatResponse,
 		Some(StopReason::Completed(_) | StopReason::StopSequence(_) | StopReason::ToolCall(_)) if !calls.is_empty() => Stop::Tools(calls),
 		Some(StopReason::Completed(_)) if refuses(&raw) => Stop::Refused,
 		Some(StopReason::Completed(_) | StopReason::StopSequence(_)) => Stop::End,
-		Some(StopReason::ToolCall(_) | StopReason::Other(_)) | None => return Err(Unrecoverable::new_other(200, format!("stopped for `{reason}`: {raw}")).into()),
+		Some(StopReason::ToolCall(_) | StopReason::Other(_)) | None => return Err(Unrecoverable::new_unusable(format!("stopped for `{reason}`"), raw.to_string(), usage).into()),
 	};
 	if text.trim().is_empty() && request.tools.is_empty() && !matches!(stop, Stop::Refused) {
-		return Err(Unrecoverable::new_empty(reason).into());
+		return Err(Unrecoverable::new_empty(reason, usage).into());
 	}
 	Ok(Answer {
 		response: Response::new(

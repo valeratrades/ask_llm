@@ -6,7 +6,7 @@
 use eyre::Report;
 use v_utils::macros::wrap_err;
 
-use crate::Provider;
+use crate::{Provider, Usage};
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -222,17 +222,22 @@ pub enum Unrecoverable {
 	#[leaf]
 	#[error("returned no text (stopped for `{stop}`)")]
 	#[diagnostic(code(ask_llm::empty), help("thinking ate the whole output budget; lower `ThinkingLevel` or raise `max_tokens`"))]
-	Empty { stop: String },
+	Empty { stop: String, usage: Usage },
+	/// The model answered, and not with what was asked for.
+	#[leaf]
+	#[error("its answer is of no use: {why}")]
+	#[diagnostic(code(ask_llm::unusable))]
+	Unusable { why: String, answer: String, usage: Usage },
 	/// The provider answered with a shape its own docs do not describe.
 	#[leaf]
-	#[error("failed to parse the response: {source}\n{body}")]
+	#[error("failed to parse the response: {source}")] // an answer holds what people wrote, and this is logged
 	#[diagnostic(code(ask_llm::schema), help("the provider changed its response shape; bump ask_llm"))]
 	Schema { source: serde_json::Error, body: String },
 	#[own]
 	#[diagnostic(transparent)]
 	Cli(Cli),
 	#[leaf]
-	#[error("rejected the request ({status}): {body}")]
+	#[error("rejected the request ({status}){}", if (200..300).contains(status) { String::new() } else { format!(": {body}") })]
 	#[diagnostic(code(ask_llm::api::other))]
 	Other { status: u16, body: String },
 }

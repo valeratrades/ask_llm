@@ -107,7 +107,7 @@ impl Source {
 		self
 	}
 
-	/// The credential is somebody else's, theirs to fix: an account refusing it logs at warn, where ours logs at error.
+	/// The credential is somebody else's, theirs to fix: what its account refuses logs at warn, where ours logs at error.
 	pub fn theirs(mut self) -> Self {
 		self.theirs = true;
 		self
@@ -133,7 +133,10 @@ impl Source {
 			Failure::Unrecoverable(u) => match u {
 				Unrecoverable::MissingToken { .. } | Unrecoverable::Cli(Cli::NotInstalled { .. }) => Level::INFO,
 				Unrecoverable::ModelUnavailable { .. } if self.provider == Provider::Ollama => Level::INFO,
-				Unrecoverable::ModelUnavailable { .. } => Level::ERROR,
+				Unrecoverable::ModelUnavailable { .. } => match self.theirs {
+					true => Level::WARN,
+					false => Level::ERROR,
+				},
 				Unrecoverable::Auth { .. } | Unrecoverable::Quota { .. } | Unrecoverable::GeoBlocked { .. } => match self.theirs || told {
 					true => Level::WARN,
 					false => Level::ERROR,
@@ -148,6 +151,7 @@ impl Source {
 				| Unrecoverable::Refused { .. }
 				| Unrecoverable::Schema { .. }
 				| Unrecoverable::Empty { .. }
+				| Unrecoverable::Unusable { .. }
 				| Unrecoverable::Other { .. } => Level::WARN,
 			},
 		};
@@ -285,6 +289,7 @@ fn node_scoped(u: &Unrecoverable) -> bool {
 		| Unrecoverable::ContextLength { .. }
 		| Unrecoverable::Unsupported { .. }
 		| Unrecoverable::Empty { .. }
+		| Unrecoverable::Unusable { .. }
 		| Unrecoverable::Cli(Cli::Empty { .. }) => true,
 		Unrecoverable::MissingToken { .. }
 		| Unrecoverable::Auth { .. }

@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use crate::{
-	Attempt, Client, Conversation, Error, Interrupted, Request, Response, Result, Source, model, usage,
+	Attempt, Client, Conversation, Error, Interrupted, Request, Response, Result, Source, model,
 	wire::{Answer, Round, Turn},
 };
 
@@ -93,7 +93,7 @@ impl Step {
 	}
 
 	fn new(Answer { response, turn, .. }: Answer, failed: Vec<Attempt>, rounds: Vec<Arc<Round>>, held: Arc<Held>) -> Self {
-		usage::log(&held.client.path.requested(), &response);
+		held.client.log(&response);
 		Self {
 			response,
 			failed,
@@ -124,18 +124,19 @@ impl Held {
 		Request {
 			rounds,
 			tools: &self.tools,
-			agentic: true,
+			step: true,
 			..self.client.request(&self.conversation)
 		}
 	}
 }
 
 impl Client {
-	/// The first step of an agent loop, and the only one another source may stand in on: see [`Step`].
+	/// The first step of an agent loop, and the only one another source may stand in on: see [`Step`]. Without tools, the one
+	/// answer, told with what failed before it and, a refusal, as one.
 	pub async fn step(&self, conv: &Conversation, tools: &[Tool]) -> Result<Step> {
 		let request = Request {
 			tools,
-			agentic: true,
+			step: true,
 			..self.request(conv)
 		};
 		let model::Walked { answer, source, failed } = model::walk(&self.path, async |source: Source| source.call(&self.config, &request).await).await?;

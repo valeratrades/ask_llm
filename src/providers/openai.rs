@@ -73,7 +73,7 @@ pub(crate) async fn call(source: &Source, config: &AppConfig, request: &Request<
 		ThinkingLevel::High => ReasoningEffort::High,
 	});
 	options.max_tokens = options.max_tokens.map(|n| n.max(16)); // the least it takes
-	if request.agentic {
+	if !request.tools.is_empty() {
 		options = options
 			.with_cache_control(CacheControl::Ephemeral) // genai turns caching off where nothing asks for it
 			.with_extra_body(json!({ "include": ["reasoning.encrypted_content"] })); // `capture_reasoning_content` would ask for summaries too

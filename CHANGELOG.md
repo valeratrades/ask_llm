@@ -179,14 +179,16 @@ Anthropic backend rewritten against the current API — the previous request sha
 
 - **Changed**: the walk goes **down**: `PriceInsensitive` → `Slow` → `Medium` → `Fast` → `Cheap`, and `Translate` → `Cheap`. `Cheap` and `Translate` no longer reach a remote model, and `Video` has nothing standing in. `Response::model` names who answered; a tier below the one asked for answering is a "falling back" warning.
 - **Changed**: with `claude_token`, Claude is reached over http on the OAuth token, no `claude` binary needed. Its failures are now `Auth`, `Quota`, `RateLimited`, `LimitReached`, `Overloaded`, `Transport`, … where they were `Cli::*`, and recoverable ones are `Error::Recoverable` where all were `Unrecoverable`. `max_tokens`, `stop_sequences`, images and documents are honoured there. Without a token, the device login still answers plain text through the CLI; images, documents and stop sequences, which failed `Unsupported`, go over http on its access token.
-- **New**: `Client::fallback_chain`: exactly these `Source`s, in order. A `Source` is a model (`Model`, `ClaudeModel`, `OpenAiModel`, or `Source::new(provider, name)`), and optionally its credential (`token`), where it is served (`at`), and that the credential is somebody else's (`theirs`: its refusals log at warn).
+- **New**: `Client::fallback_chain`: exactly these `Source`s, in order. A `Source` is a model (`Model`, `ClaudeModel`, `OpenAiModel`, or `Source::new(provider, name)`), and optionally its credential (`token`), where it is served (`at`), and that the credential is somebody else's (`theirs`: what its account refuses logs at warn).
 - **New**: `Client::step` and `Step::resume`: one step of an agent loop over `Tool`s. Only the first step may be answered by another source; after it, a failure is `Error::Interrupted`. A refusal is `Stop::Refused`.
 - **New**: `Client::json_schema` and `Response::json`: an answer held to a schema by the provider.
 - **New**: `Response::{stop, usage, cents}`. `cents` is `None` where the model's price is unknown. **Deprecated**: `cost_cents`, NaN there; `Watched::cost_cents` is NaN once any read was.
-- **New**: `Recoverable::LimitReached` (a subscription's window, with its reset), `Unrecoverable::Empty`.
+- **New**: `Recoverable::LimitReached` (a subscription's window, with its reset); `Unrecoverable::Empty` (no text) and `Unrecoverable::Unusable` (not the json asked for, or stopped for a reason unknown), both with the `usage` billed.
+- **New**: `Client::unlogged`: no usage log.
+- **Changed**: `Unrecoverable::Schema`, and `Other` of a 2xx, no longer print the body; it is in the field.
 - **Changed**: a credential refused, out of credit, a region refused or a retired model is an error-level event, once per call and credential.
 - **Changed**: an answer with no text fails `Empty` on every provider; a binary attachment that is neither an image nor a PDF fails `Unsupported` on OpenAI too (it sent a placeholder); OpenAI goes through the Responses API, and `overhead` is zero where the wire does not tell it.
-- **Changed**: a usage log that cannot be written is an error event, not a panic. Long-prompt rates are priced.
+- **Changed**: a usage log that cannot be written, or has no home, is an error event, not a panic. Long-prompt rates are priced.
 - (dep `genai`) `serde_json/preserve_order` and `tokio/test-util` are on in whatever depends on this.
 
 ---

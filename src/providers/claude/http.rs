@@ -16,7 +16,7 @@ const SUBSCRIPTION: &str = "You are Claude Code, Anthropic's official CLI for Cl
 pub(super) async fn call(token: &str, source: &Source, request: &Request<'_>) -> Result<Answer, Failure> {
 	let (system, messages) = transcript(request)?;
 	let mut body = json!({ "system": system, "messages": messages });
-	if request.agentic {
+	if !request.tools.is_empty() {
 		body["cache_control"] = json!({ "type": "ephemeral" }); // the breakpoint follows the rounds
 	}
 	let mut options = wire::options(request)
@@ -48,7 +48,7 @@ pub(super) async fn call(token: &str, source: &Source, request: &Request<'_>) ->
 	if let (Json::Object, Stop::End) = (request.json, &answer.response.stop)
 		&& let Err(e) = serde_json::from_str::<Value>(&answer.response.text)
 	{
-		return Err(Unrecoverable::new_schema(e, answer.response.text).into());
+		return Err(Unrecoverable::new_unusable(format!("not json: {e}"), answer.response.text, answer.response.usage).into());
 	}
 	Ok(answer)
 }

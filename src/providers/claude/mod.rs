@@ -51,6 +51,9 @@ pub(crate) async fn call(source: &Source, config: &AppConfig, request: &Request<
 			"hand a token over with `Client::claude_token(…)` or `claude_token` in ~/.config/ask_llm.nix, or log in an account under ~/.claude/accounts ({e:#})"
 		))
 	};
+	if std::env::home_dir().is_none() {
+		return Err(missing(eyre::eyre!("no home to hold them")).into());
+	}
 	let account = accounts::Accounts::home().current().map_err(missing)?;
 	if source.origin.is_none() && cli::says(request) {
 		return cli::call(&account, source, request).await;

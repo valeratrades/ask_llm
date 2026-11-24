@@ -418,7 +418,7 @@ async fn a_schema_is_enforced_on_every_wire() {
 	assert_eq!(ollama.asked()[0].body["format"], schema);
 
 	let unread = client.fallback_chain([openai.openai()]).conversation(&question()).await.unwrap().json::<Value>();
-	assert!(unread.unwrap_err().to_string().contains("rather"));
+	assert!(unread.unwrap_err().to_string().contains("gpt-5.6-luna"));
 }
 
 #[tokio::test]
@@ -441,6 +441,110 @@ async fn a_refusal_is_a_step_s_answer_and_an_ask_s_error() {
 	)]);
 	let step = Client::default().fallback_chain([server.openai()]).step(&question(), &thermometer()).await.unwrap();
 	assert!(matches!(step.stop, Stop::Refused));
+}
+
+#[tokio::test]
+async fn a_step_without_tools_pays_for_no_cache() {
+	let claude_ = Server::start(vec![claude(json!([{ "type": "text", "text": "warm" }]), "end_turn")]);
+	Client::default().fallback_chain([claude_.claude("sk-ant-oat01-a")]).step(&question(), &[]).await.unwrap();
+	assert_eq!(claude_.asked()[0].body.get("cache_control"), None);
+
+	let openai = Server::start(vec![openai_text("warm")]);
+	Client::default().fallback_chain([openai.openai()]).step(&question(), &[]).await.unwrap();
+	assert_eq!(openai.asked()[0].body.get("include"), None);
+}
+
+#[tokio::test]
+async fn a_model_not_served_to_a_person_is_not_paged() {
+	let server = Server::start(vec![claude_error(404, "not_found_error")]);
+	let (levels, _guard) = events();
+	let failed = Client::default().fallback_chain([server.claude("sk-ant-oat01-theirs").theirs()]).conversation(&question()).await;
+	assert!(matches!(failed, Err(Error::Unrecoverable(_))), "{failed:?}");
+	assert_eq!((count(&levels, tracing::Level::ERROR), count(&levels, tracing::Level::WARN)), (0, 1));
+}
+
+#[tokio::test]
+async fn an_answer_is_never_in_what_its_failure_displays() {
+	const MAIL: &str = "dear Ada";
+	let shown = async |reply: (u16, &'static str, Value)| {
+		let server = Server::start(vec![reply]);
+		let failed = Client::default().force_json().fallback_chain([server.claude("sk-ant-oat01-a")]).step(&question(), &[]).await;
+		let Err(Error::Unrecoverable(exhausted)) = failed else {
+			panic!("{failed:?}");
+		};
+		let failure = &exhausted.attempts[0].failure;
+		assert!(format!("{failure:?}").contains(MAIL), "it stays in the field: {failure:?}");
+		failure.to_string()
+	};
+	let text = || json!([{ "type": "text", "text": MAIL }]);
+	let mut unread = claude(text(), "end_turn");
+	unread.2["usage"] = Value::Null;
+	for reply in [unread, claude(text(), "end_turn"), claude(text(), "pause_turn"), (200, "", json!({ "content": MAIL }))] {
+		let shown = shown(reply).await;
+		assert!(!shown.contains(MAIL), "{shown}");
+	}
+	let refused = shown((400, "", json!({ "type": "error", "error": { "type": "invalid_request_error", "message": MAIL } }))).await;
+	assert!(refused.contains(MAIL), "what a provider says of a refused request is told: {refused}");
+
+	let server = Server::start(vec![openai_text("{\"warm\": \"dear Ada\"}")]);
+	let answer = Client::default().fallback_chain([server.openai()]).conversation(&question()).await.unwrap();
+	let unread = format!("{:?}", answer.json::<std::collections::HashMap<String, bool>>().unwrap_err());
+	assert!(!unread.contains(MAIL), "{unread}");
+}
+
+#[tokio::test]
+async fn a_billed_answer_that_is_none_tells_what_it_used() {
+	let server = Server::start(vec![claude(json!([]), "max_tokens"), claude(json!([{ "type": "text", "text": "rather" }]), "end_turn")]);
+	let client = Client::default().force_json().fallback_chain([server.claude("sk-ant-oat01-a")]);
+	for _ in 0..2 {
+		let Err(Error::Unrecoverable(exhausted)) = client.conversation(&question()).await else {
+			panic!("nothing in it to use");
+		};
+		let (Failure::Unrecoverable(Unrecoverable::Empty { usage, .. }) | Failure::Unrecoverable(Unrecoverable::Unusable { usage, .. })) = &exhausted.attempts[0].failure else {
+			panic!("{exhausted:?}");
+		};
+		assert_eq!(usage.output, 40);
+	}
+}
+
+#[tokio::test]
+async fn an_unlogged_client_writes_no_usage() {
+	let logged = |model: &str| {
+		let dirs = std::fs::read_dir(ISOLATED.path().join("ask_llm/usage")).unwrap();
+		let files = dirs
+			.flat_map(|d| std::fs::read_dir(d.unwrap().path()).unwrap())
+			.map(|f| std::fs::read_to_string(f.unwrap().path()).unwrap());
+		files.map(|f| f.matches(model).count()).sum::<usize>()
+	};
+	let server = Server::start(vec![openai_text("warm"), openai_text("warm"), openai_text("warm")]);
+	let client = |model| Client::default().fallback_chain([Source::new(Provider::OpenAi, model).token("sk-test").at(&server.origin)]);
+	client("gpt-counted").conversation(&question()).await.unwrap();
+	client("gpt-uncounted").unlogged().conversation(&question()).await.unwrap();
+	client("gpt-uncounted").unlogged().step(&question(), &[]).await.unwrap();
+	assert!(logged("gpt-counted") > 0);
+	assert_eq!(logged("gpt-uncounted"), 0);
+}
+
+#[test]
+fn no_data_home_is_told_and_not_fatal() {
+	let alone = std::process::Command::new(std::env::current_exe().unwrap())
+		.args(["--ignored", "--exact", "sources::asked_without_a_data_home"])
+		.env_remove("HOME")
+		.output()
+		.unwrap();
+	let told = String::from_utf8_lossy(&alone.stdout);
+	assert!(told.contains("1 passed"), "{told}");
+}
+
+#[tokio::test]
+#[ignore = "`no_data_home_is_told_and_not_fatal` runs it, in a process of its own"]
+async fn asked_without_a_data_home() {
+	let server = Server::start(vec![openai_text("warm")]);
+	// SAFETY: the only test of its process
+	unsafe { std::env::remove_var("XDG_DATA_HOME") };
+	let (levels, _guard) = events();
+	Client::default().fallback_chain([server.openai()]).conversation(&question()).await.unwrap();
+	assert_eq!(count(&levels, tracing::Level::ERROR), 1);
 }
 
 #[test]
