@@ -229,11 +229,11 @@ where
 		Path::Chain(sources) => sources.clone(),
 	};
 	let mut dead: Vec<(Provider, Option<String>)> = Vec::new();
+	let mut told: Vec<(Provider, Option<String>)> = Vec::new();
 	let mut failed: Vec<Attempt> = Vec::new();
 	for source in sources {
 		let account = (source.provider, source.token.clone());
-		let told = dead.contains(&account);
-		if told && matches!(path, Path::Tiers(_)) {
+		if dead.contains(&account) && matches!(path, Path::Tiers(_)) {
 			continue;
 		}
 		let failure = match attempt(source.clone()).await {
@@ -249,7 +249,13 @@ where
 			}
 			Err(failure) => failure,
 		};
-		source.tell(&failure, told);
+		source.tell(&failure, told.contains(&account));
+		if matches!(
+			failure,
+			Failure::Unrecoverable(Unrecoverable::Auth { .. } | Unrecoverable::Quota { .. } | Unrecoverable::GeoBlocked { .. } | Unrecoverable::Cli(_))
+		) {
+			told.push(account.clone());
+		}
 		if let Failure::Unrecoverable(u) = &failure
 			&& !node_scoped(u)
 		{

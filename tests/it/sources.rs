@@ -186,6 +186,18 @@ async fn a_chain_is_used_exactly_and_a_dead_source_told_once() {
 }
 
 #[tokio::test]
+async fn a_dead_source_is_told_after_it_failed_otherwise() {
+	let server = Server::start(vec![claude_error(400, "invalid_request_error"), claude_error(401, "authentication_error")]);
+	let (levels, _guard) = events();
+	let failed = Client::default()
+		.fallback_chain([server.claude("sk-ant-oat01-a"), server.claude("sk-ant-oat01-a")])
+		.conversation(&question())
+		.await;
+	assert!(matches!(failed, Err(Error::Unrecoverable(_))), "{failed:?}");
+	assert_eq!(count(&levels, tracing::Level::ERROR), 1);
+}
+
+#[tokio::test]
 async fn another_token_stands_in_for_a_person_s_dead_one_unpaged() {
 	let server = Server::start(vec![claude_error(403, "permission_error"), claude(json!([{ "type": "text", "text": "warm" }]), "end_turn")]);
 	let (levels, _guard) = events();
