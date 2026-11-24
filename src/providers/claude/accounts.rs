@@ -232,12 +232,19 @@ struct Left {
 	reset: Option<Timestamp>,
 }
 
-async fn login(dir: &Path) -> Result<Login> {
+/// `None` once expired: refreshing it from here would race the lock of whichever claude owns the account.
+pub(super) fn access_token(dir: &Path) -> Result<Option<String>> {
 	let credentials = dir.join(".credentials.json");
-	if !credentials.exists() {
+	let read = fs::read_to_string(&credentials).wrap_err_with(|| format!("reading {}", credentials.display()))?;
+	let oauth = serde_json::from_str::<Credentials>(&read)?.claude_ai_oauth;
+	Ok((oauth.expires_at > Timestamp::now().as_millisecond()).then_some(oauth.access_token))
+}
+
+async fn login(dir: &Path) -> Result<Login> {
+	if !dir.join(".credentials.json").exists() {
 		return Ok(Login::None);
 	}
-	let oauth = serde_json::from_str::<Credentials>(&fs::read_to_string(&credentials)?)?.claude_ai_oauth;
+	let token = access_token(dir)?;
 	let file = dir.join("meta.json");
 	let cached = || -> Result<Option<Meta>> {
 		if !file.exists() {
@@ -245,14 +252,13 @@ async fn login(dir: &Path) -> Result<Login> {
 		}
 		Ok(Some(serde_json::from_str(&fs::read_to_string(&file)?).wrap_err_with(|| format!("parsing {}", file.display()))?))
 	};
-	// live only while the access token is: refreshing it from here would race the lock of whichever claude owns the account
-	if oauth.expires_at <= Timestamp::now().as_millisecond() {
+	let Some(token) = token else {
 		return Ok(Login::In {
 			snapshot: cached()?,
 			source: Source::Cached,
 		});
-	}
-	match fetch(&oauth.access_token).await {
+	};
+	match fetch(&token).await {
 		Ok(meta) => {
 			fs::write(&file, serde_json::to_string(&meta)?)?;
 			Ok(Login::In {

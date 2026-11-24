@@ -1,29 +1,58 @@
 #![feature(default_field_values)]
 #![feature(error_generic_member_access)]
-use std::{future::Future, path::Path, pin::Pin};
+use std::path::Path;
 
 mod error;
 mod model;
 pub mod providers;
-pub use error::{Attempt, Cli, Error, Exhausted, Failure, Recoverable, Result, Transport, Unrecoverable};
-pub use model::{Model, Provider};
+mod step;
+mod usage;
+mod wire;
+pub use error::{Attempt, Cli, Error, Exhausted, Failure, Interrupted, Recoverable, Result, Transport, Unrecoverable};
+pub use model::{Model, Provider, Source};
+pub use step::{Step, Stop, Tool, ToolCall};
+pub use usage::Usage;
 
 impl Client {
 	/// Keys absent from `config` are looked up when the request is made: in the environment, except Claude's (see [`config::AppConfig::claude_token`]).
 	pub fn new(config: config::AppConfig) -> Self {
 		Self {
 			config,
-			model: Model::default(),
+			path: model::Path::Tiers(Model::default()),
 			max_tokens: None,
 			stop_sequences: None,
 			force_json: false,
+			schema: None,
 			files: Vec::new(),
 			thinking: ThinkingLevel::default(),
 		}
 	}
 
+	/// The tier asked for; the ones below it stand in, in order, when it does not answer. A [`Self::fallback_chain`] outranks it.
 	pub fn model(mut self, model: Model) -> Self {
-		self.model = model;
+		if let model::Path::Tiers(entry) = &mut self.path {
+			*entry = model;
+		}
+		self
+	}
+
+	/// Exactly these, in order, and nothing else. Every one is tried until one answers, so the place of an attempt is that
+	/// of its source:
+	/// ```no_run
+	/// use ask_llm::{Client, Model, Provider, Source, providers::claude::ClaudeModel};
+	/// # fn f(theirs: &str, ours: &str) -> Client {
+	/// Client::default().fallback_chain([
+	/// 	Source::from(ClaudeModel::Opus5_5).token(theirs).theirs(),
+	/// 	Source::from(ClaudeModel::Opus5_5).token(ours),
+	/// 	Source::new(Provider::OpenAi, "gpt-5.6-terra"),
+	/// 	Model::Fast.into(),
+	/// ])
+	/// # }
+	/// ```
+	pub fn fallback_chain<S: Into<Source>>(mut self, sources: impl IntoIterator<Item = S>) -> Self {
+		let sources: Vec<Source> = sources.into_iter().map(Into::into).collect();
+		assert!(!sources.is_empty(), "a chain names who answers");
+		self.path = model::Path::Chain(sources);
 		self
 	}
 
@@ -53,15 +82,19 @@ impl Client {
 		self
 	}
 
+	/// What the answer must match: held to it by the provider, where it can be. Read it with [`Response::json`].
+	pub fn json_schema(mut self, schema: serde_json::Value) -> Self {
+		self.schema = Some(schema);
+		self
+	}
+
 	pub fn thinking(mut self, level: ThinkingLevel) -> Self {
 		self.thinking = level;
 		self
 	}
 
 	/// Append a file to be included with the request.
-	/// Supported media types: application/pdf, text/plain, text/markdown, text/csv,
-	/// application/vnd.openxmlformats-officedocument.wordprocessingml.document (docx),
-	/// application/vnd.openxmlformats-officedocument.spreadsheetml.sheet (xlsx)
+	/// Supported media types: application/pdf, images, and whatever is utf-8 text.
 	pub fn append_file(mut self, base64_data: String, media_type: String) -> Self {
 		self.files.push(FileAttachment { base64_data, media_type });
 		self
@@ -83,31 +116,43 @@ impl Client {
 	}
 
 	pub async fn conversation(&self, conv: &Conversation) -> Result<Response> {
-		self.send(conv, &self.files, self.force_json, None).await
+		self.send(conv, &self.files, self.json()).await
 	}
 
-	/// `schema` is what a forced json answer must match; without one it is held to being an object.
-	async fn send(&self, conv: &Conversation, files: &[FileAttachment], force_json: bool, schema: Option<&serde_json::Value>) -> Result<Response> {
-		let stop_seqs: Option<Vec<&str>> = self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect());
-		let request = Request {
-			conversation: conv,
-			max_tokens: self.max_tokens,
-			stop_sequences: stop_seqs,
-			force_json,
-			schema,
-			files,
-			thinking: self.thinking,
-		};
-		let response = model::walk(self.model, async |model| {
-			let backend = model.backend(&self.config)?;
-			let start = std::time::Instant::now();
-			let mut response = backend.conversation(&request).await?;
-			response.duration = start.elapsed();
-			Ok(response)
+	async fn send(&self, conv: &Conversation, files: &[FileAttachment], json: Json<'_>) -> Result<Response> {
+		let request = Request { files, json, ..self.request(conv) };
+		let walked = model::walk(&self.path, async |source: Source| {
+			let answer = source.call(&self.config, &request).await?;
+			match answer.response.stop {
+				Stop::Refused => Err(Unrecoverable::new_refused(answer.reason).into()),
+				_ => Ok(answer.response),
+			}
 		})
 		.await?;
-		log_usage(self.model, &response);
-		Ok(response)
+		usage::log(&self.path.requested(), &walked.answer);
+		Ok(walked.answer)
+	}
+
+	fn request<'a>(&'a self, conversation: &'a Conversation) -> Request<'a> {
+		Request {
+			conversation,
+			rounds: &[],
+			tools: &[],
+			agentic: false,
+			max_tokens: self.max_tokens,
+			stop_sequences: self.stop_sequences.as_ref().map(|v| v.iter().map(|s| s.as_str()).collect()),
+			json: self.json(),
+			files: &self.files,
+			thinking: self.thinking,
+		}
+	}
+
+	fn json(&self) -> Json<'_> {
+		match &self.schema {
+			Some(schema) => Json::Schema(schema),
+			None if self.force_json => Json::Object,
+			None => Json::Free,
+		}
 	}
 }
 
@@ -127,17 +172,43 @@ pub(crate) const MAX_TOKENS: usize = 128_000;
 /// Fences are mentioned because the models otherwise wrap the object in them even when told to emit json only.
 pub(crate) const FORCE_JSON_SUFFIX: &str = "\n\nRespond with valid JSON only, no other text or markdown fences.";
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Response {
 	pub text: String,
+	/// What the tokens list for, in US cents; under a subscription nobody is billed it. `None`: we hold no price of the model's.
+	pub cents: Option<f32>,
+	#[deprecated(since = "3.13.0", note = "`cents`, which says when the price is unknown; this is NaN then")]
 	pub cost_cents: f32,
 	pub duration: std::time::Duration,
-	/// Overhead before generation starts (model load for Ollama, time to first token for Claude).
+	/// Overhead before generation starts, where the wire tells it: model load for Ollama, time to first token for the Claude CLI.
 	pub overhead: std::time::Duration,
+	/// The deployment that answered.
 	pub model: String,
 	pub thinking: ThinkingLevel,
-	pub(crate) usage: Usage,
+	pub usage: Usage,
+	pub stop: Stop,
 }
 impl Response {
+	#[allow(deprecated)] // the one place that fills `cost_cents`
+	pub(crate) fn new(text: String, cents: Option<f32>, overhead: std::time::Duration, model: &str, thinking: ThinkingLevel, usage: Usage, stop: Stop) -> Self {
+		Self {
+			text,
+			cents,
+			cost_cents: cents.unwrap_or(f32::NAN), // summed or printed, it stays visibly unknown
+			duration: std::time::Duration::ZERO,
+			overhead,
+			model: model.to_string(),
+			thinking,
+			usage,
+			stop,
+		}
+	}
+
+	/// The answer to a [`Client::json_schema`] or a [`Client::force_json`].
+	pub fn json<T: serde::de::DeserializeOwned>(&self) -> eyre::Result<T> {
+		serde_json::from_str(&self.text).map_err(|e| eyre::eyre!("{}, stopped for {:?}: the answer is not the json asked for: {e}\n{}", self.model, self.stop, self.text))
+	}
+
 	/// Extract codeblocks with optional extension filtering.
 	/// If extensions is None or empty, all codeblocks are returned.
 	/// Extensions are tried in reverse sorted order (longer extensions first).
@@ -265,6 +336,27 @@ pub enum MessageContent {
 	Document { base64_data: String, media_type: String },
 	Mixed { parts: Vec<ContentPart> },
 }
+impl MessageContent {
+	pub(crate) fn parts(&self) -> Vec<ContentPart> {
+		let image = |base64_data: &String, media_type: &String| ContentPart::Image {
+			base64_data: base64_data.clone(),
+			media_type: media_type.clone(),
+		};
+		match self {
+			Self::Text(text) => vec![ContentPart::Text(text.clone())],
+			Self::Image { base64_data, media_type } => vec![image(base64_data, media_type)],
+			Self::TextAndImages { text, images } => std::iter::once(ContentPart::Text(text.clone()))
+				.chain(images.iter().map(|i| image(&i.base64_data, &i.media_type)))
+				.collect(),
+			Self::Document { base64_data, media_type } => vec![ContentPart::Document {
+				base64_data: base64_data.clone(),
+				media_type: media_type.clone(),
+			}],
+			Self::Mixed { parts } => parts.clone(),
+		}
+	}
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Role {
 	System,
@@ -284,85 +376,39 @@ pub struct FileAttachment {
 	pub base64_data: String,
 	pub media_type: String,
 }
+impl FileAttachment {
+	/// PDFs as documents, images as images, anything else as its text.
+	pub(crate) fn part(&self) -> std::result::Result<ContentPart, Unrecoverable> {
+		use base64::Engine;
+
+		let Self { base64_data, media_type } = self.clone();
+		Ok(match media_type.as_str() {
+			"application/pdf" => ContentPart::Document { base64_data, media_type },
+			mt if mt.starts_with("image/") => ContentPart::Image { base64_data, media_type },
+			mt => ContentPart::Text(
+				base64::engine::general_purpose::STANDARD
+					.decode(&base64_data)
+					.ok()
+					.and_then(|bytes| String::from_utf8(bytes).ok())
+					.ok_or_else(|| Unrecoverable::new_unsupported("a binary attachment that is neither an image nor a PDF", format!("`{mt}` has no content block; convert it first")))?,
+			),
+		})
+	}
+}
 /// Client for interacting with LLMs.
 ///
 /// Default settings produce a simple oneshot call with Model::Medium.
 #[derive(Clone)]
 pub struct Client {
 	config: config::AppConfig,
-	model: Model,
+	path: model::Path,
 	max_tokens: Option<usize>,
 	stop_sequences: Option<Vec<String>>,
 	force_json: bool,
+	schema: Option<serde_json::Value>,
 	files: Vec<FileAttachment>,
 	thinking: ThinkingLevel,
 }
-pub(crate) trait Backend: Send + Sync {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> Pin<Box<dyn Future<Output = std::result::Result<Response, Failure>> + Send + 'a>>;
-}
-/// One line per answered call, under the app's `argv[0]` stem; see docs/ARCHITECTURE.md#usage-log.
-fn log_usage(requested: Model, response: &Response) {
-	use std::io::Write as _;
-
-	let argv0 = std::env::args_os().next().expect("every process is started with argv[0]");
-	let app = Path::new(&argv0).file_stem().expect("argv[0] names a file").to_string_lossy().into_owned();
-	let now = jiff::Timestamp::now();
-	let dir = Path::new(&v_utils::io::xdg::xdg_data_fallback()).join("ask_llm/usage").join(app);
-	std::fs::create_dir_all(&dir).expect("the data home is writable");
-	let usage = response.usage;
-	let mut line = serde_json::json!({
-		"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
-		"requested": format!("{requested:?}"),
-		"model": response.model,
-		"thinking": response.thinking.to_string(),
-		"cost_cents": response.cost_cents,
-		"input": usage.input,
-		"cached_input": usage.cached_input,
-		"cache_write": usage.cache_write,
-		"output": usage.output,
-		"duration_ms": response.duration.as_millis(),
-		"overhead_ms": response.overhead.as_millis(),
-	})
-	.to_string();
-	line.push('\n');
-	std::fs::OpenOptions::new()
-		.create(true)
-		.append(true)
-		.open(dir.join(now.strftime("%Y-%m.jsonl").to_string()))
-		.and_then(|mut f| f.write_all(line.as_bytes())) // one write on an O_APPEND fd, so concurrent callers don't interleave
-		.expect("the data home is writable");
-}
-
-/// Per-1M-token rates, as every provider quotes them.
-pub(crate) struct Cost {
-	pub million_input_tokens: f32,
-	/// Input served from a cached prefix, which every provider here discounts to a tenth.
-	pub million_cached_input_tokens: f32,
-	/// Input written into the cache. Zero where the provider charges nothing for the write.
-	pub million_cache_write_tokens: f32,
-	pub million_output_tokens: f32,
-}
-impl Cost {
-	pub fn cents(&self, usage: Usage) -> f32 {
-		(usage.input as f32 * self.million_input_tokens
-			+ usage.cached_input as f32 * self.million_cached_input_tokens
-			+ usage.cache_write as f32 * self.million_cache_write_tokens
-			+ usage.output as f32 * self.million_output_tokens)
-			/ 10_000.0
-	}
-}
-
-/// Token counts lifted out of a provider's usage block. Providers disagree on whether the cache tiers are a
-/// breakdown of the input count or additional to it, so each backend resolves its own before filling this in.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Usage {
-	/// Billed at full rate: neither served from cache nor written to it.
-	pub input: u32,
-	pub cached_input: u32,
-	pub cache_write: u32,
-	pub output: u32,
-}
-
 impl From<Role> for &'static str {
 	fn from(role: Role) -> Self {
 		match role {
@@ -373,28 +419,45 @@ impl From<Role> for &'static str {
 	}
 }
 
-/// The one place an HTTP rejection becomes a [`Failure`]; no backend inspects a status code itself.
-/// The raw json is logged before deserializing so that a schema drift is legible rather than a bare serde path.
-pub(crate) async fn json_response<T: serde::de::DeserializeOwned>(response: reqwest::Response, provider: Provider) -> std::result::Result<T, Failure> {
-	let status = response.status();
-	let retry_after = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).map(str::to_owned);
-	let body = response.text().await.map_err(|e| Transport::classify(provider, e))?;
-	if !status.is_success() {
-		return Err(Failure::classify(provider, status.as_u16(), retry_after.as_deref(), &body));
-	}
-	let value: serde_json::Value = serde_json::from_str(&body).map_err(|source| Unrecoverable::new_schema(source, body.clone()))?;
-	tracing::debug!(%provider, ?value);
-	serde_json::from_value(value.clone()).map_err(|source| Unrecoverable::new_schema(source, serde_json::to_string_pretty(&value).expect("a parsed Value always serializes")).into())
+/// What the answer is held to.
+#[derive(Clone, Copy)]
+pub(crate) enum Json<'a> {
+	Free,
+	Object,
+	Schema(&'a serde_json::Value),
 }
 
 pub(crate) struct Request<'a> {
 	pub conversation: &'a Conversation,
+	/// Answered tool calls, after the conversation.
+	pub rounds: &'a [std::sync::Arc<wire::Round>],
+	pub tools: &'a [Tool],
+	/// More rounds may follow on the same prefix.
+	pub agentic: bool,
 	pub max_tokens: Option<usize>,
 	pub stop_sequences: Option<Vec<&'a str>>,
-	pub force_json: bool,
-	pub schema: Option<&'a serde_json::Value>,
+	pub json: Json<'a>,
 	pub files: &'a [FileAttachment],
 	pub thinking: ThinkingLevel,
+}
+impl Request<'_> {
+	/// The conversation, with the files ahead of the first user turn and, where no schema is enforced on it, the wish for json at its end.
+	pub fn turns(&self) -> std::result::Result<Vec<(Role, Vec<ContentPart>)>, Unrecoverable> {
+		let mut turns: Vec<(Role, Vec<ContentPart>)> = self.conversation.0.iter().map(|m| (m.role, m.content.parts())).collect();
+		let (Some(first), Some(_)) = (turns.iter().position(|(role, _)| matches!(role, Role::User)), turns.last()) else {
+			return Err(Unrecoverable::new_unsupported("an empty conversation", "add at least one user turn".to_string()));
+		};
+		let files = self.files.iter().map(FileAttachment::part).collect::<std::result::Result<Vec<_>, _>>()?;
+		turns[first].1.splice(..0, files);
+		if let Json::Object = self.json {
+			let last = &mut turns.last_mut().expect("the first user turn is among them").1;
+			match last.last_mut() {
+				Some(ContentPart::Text(text)) => text.push_str(FORCE_JSON_SUFFIX),
+				_ => last.push(ContentPart::Text(FORCE_JSON_SUFFIX.to_string())),
+			}
+		}
+		Ok(turns)
+	}
 }
 
 impl std::fmt::Debug for Client {
@@ -451,8 +514,10 @@ impl std::fmt::Display for Response {
 		let ms_per_char = if chars > 0 { gen_secs * 1000.0 / chars as f32 } else { 0.0 };
 		write!(
 			f,
-			"[model: {} | thinking: {} | cost: {:.4}¢ | overhead: {overhead:.1}s | gen: {gen_secs:.1}s | {ms_per_char:.1}ms/char]",
-			self.model, self.thinking, self.cost_cents
+			"[model: {} | thinking: {} | cost: {} | overhead: {overhead:.1}s | gen: {gen_secs:.1}s | {ms_per_char:.1}ms/char]",
+			self.model,
+			self.thinking,
+			self.cents.map_or_else(|| "unknown".to_string(), |c| format!("{c:.4}¢"))
 		)
 	}
 }

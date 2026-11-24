@@ -1,17 +1,20 @@
-//! Each [`Model`] owns one deployment, and [`Model::next`] chains them from cheap to capable; a call climbs
-//! the chain until one answers. See `docs/ARCHITECTURE.md` for the graph and its invariants.
+//! Each tier ([`Model`]) stands for one [`Source`], and [`Model::next`] chains them downwards; a call walks the chain,
+//! or the one its caller gave, until a source answers. See `docs/ARCHITECTURE.md` for the graph and its invariants.
 use std::future::Future;
 
+use tracing::Level;
+
 use crate::{
-	Backend, Response,
+	Cli, Request, Transport,
 	config::AppConfig,
-	error::{Attempt, Error, Exhausted, Failure, Unrecoverable},
+	error::{Attempt, Error, Exhausted, Failure, Recoverable, Unrecoverable},
 	providers::{
 		claude::{self, ClaudeModel},
 		ollama,
 		openai::{self, OpenAiModel},
 	},
 	segment,
+	wire::Answer,
 };
 
 #[non_exhaustive]
@@ -47,59 +50,15 @@ pub enum Model {
 	SegmentLocal,
 }
 impl Model {
-	/// The fallback edge. Never points to a weaker model.
+	/// The fallback edge. Only ever down.
 	const fn next(self) -> Option<Model> {
 		match self {
-			Self::Translate => Some(Self::Cheap),
-			Self::Cheap => Some(Self::Fast),
-			Self::Fast | Self::Video => Some(Self::Medium),
-			Self::Medium => Some(Self::Slow),
-			Self::Slow => Some(Self::PriceInsensitive),
-			Self::PriceInsensitive | Self::Segment | Self::SegmentLocal => None,
+			Self::PriceInsensitive => Some(Self::Slow),
+			Self::Slow => Some(Self::Medium),
+			Self::Medium => Some(Self::Fast),
+			Self::Fast | Self::Translate => Some(Self::Cheap),
+			Self::Cheap | Self::Video | Self::Segment | Self::SegmentLocal => None,
 		}
-	}
-
-	const fn deployment(self) -> Deployment {
-		match self {
-			Self::Translate => Deployment::Ollama("translategemma:4b"),
-			Self::Cheap => Deployment::Ollama("qwen3.5:4b"),
-			Self::Fast | Self::Video => Deployment::OpenAi(OpenAiModel::Luna),
-			Self::Medium => Deployment::Claude(ClaudeModel::Sonnet5_5),
-			Self::Slow => Deployment::Claude(ClaudeModel::Opus5_5),
-			Self::PriceInsensitive => Deployment::Claude(ClaudeModel::Fable5_1),
-			Self::Segment => Deployment::Segment(segment::Model::Sam3_1),
-			Self::SegmentLocal => Deployment::Segment(segment::Model::Sam2_1),
-		}
-	}
-
-	/// Resolved per request, so a key missing for *this* model fails only this model.
-	pub(crate) fn backend(self, config: &AppConfig) -> Result<Box<dyn Backend>, Failure> {
-		Ok(match self.deployment() {
-			Deployment::Ollama(model) => Box::new(ollama::Ollama {
-				model: model.to_string(),
-				url: "http://localhost:11434/api/chat".to_string(),
-			}),
-			Deployment::OpenAi(model) => Box::new(openai::OpenAi {
-				api_key: config.openai_token.clone().or_else(|| std::env::var("OPENAI_API_KEY").ok()).ok_or_else(|| {
-					Unrecoverable::new_missing_token("hand it over with `Client::openai_token(…)`, put `openai_token` in ~/.config/ask_llm.nix, or export OPENAI_API_KEY".to_string())
-				})?,
-				model,
-			}),
-			Deployment::Claude(model) => Box::new(claude::Claude {
-				credentials: match &config.claude_token {
-					Some(token) => claude::Credentials::Token(token.clone()),
-					None => claude::Credentials::Account(claude::accounts::Accounts::home().current().map_err(|e| {
-						Unrecoverable::new_missing_token(format!(
-							"hand a token over with `Client::claude_token(…)` or `claude_token` in ~/.config/ask_llm.nix, or log in an account under ~/.claude/accounts ({e:#})"
-						))
-					})?),
-				},
-				model,
-			}),
-			Deployment::Segment(model) => {
-				return Err(Unrecoverable::new_unsupported("a conversation", format!("{} makes masks, through `segment::segment`", model.id())).into());
-			}
-		})
 	}
 }
 
@@ -107,77 +66,206 @@ impl TryFrom<Model> for segment::Model {
 	type Error = eyre::Report;
 
 	fn try_from(model: Model) -> eyre::Result<Self> {
-		match model.deployment() {
-			Deployment::Segment(m) => Ok(m),
+		match model {
+			Model::Segment => Ok(segment::Model::Sam3_1),
+			Model::SegmentLocal => Ok(segment::Model::Sam2_1),
 			_ => eyre::bail!("{model:?} makes no masks; `Segment` and `SegmentLocal` (`segment`, `segment-local`) do"),
 		}
 	}
 }
 
-/// What a [`Model`] runs on; the provider and the backend both follow from it.
-enum Deployment {
-	Ollama(&'static str),
-	OpenAi(OpenAiModel),
-	Claude(ClaudeModel),
-	Segment(segment::Model),
+/// Who answers: a model of a provider's, on whose credential, and where.
+#[derive(Clone)]
+pub struct Source {
+	pub(crate) provider: Provider,
+	pub(crate) model: &'static str,
+	pub(crate) token: Option<String>,
+	pub(crate) origin: Option<String>,
+	theirs: bool,
 }
-impl Deployment {
-	const fn provider(&self) -> Provider {
-		match self {
-			Self::Ollama(_) => Provider::Ollama,
-			Self::OpenAi(_) => Provider::OpenAi,
-			Self::Claude(_) => Provider::Claude,
-			Self::Segment(model) => model.provider(),
+impl Source {
+	/// `model` as the provider names it.
+	pub const fn new(provider: Provider, model: &'static str) -> Self {
+		Self {
+			provider,
+			model,
+			token: None,
+			origin: None,
+			theirs: false,
 		}
 	}
 
-	const fn name(&self) -> &'static str {
+	/// Claude: `sk-ant-oat01-…`, as [`AppConfig::claude_token`]. OpenAI: an api key. Without one the client's config decides.
+	pub fn token(mut self, token: impl Into<String>) -> Self {
+		self.token = Some(token.into());
+		self
+	}
+
+	/// What comes before the provider's own path, eg `https://api.anthropic.com`.
+	pub fn at(mut self, origin: impl Into<String>) -> Self {
+		self.origin = Some(origin.into());
+		self
+	}
+
+	/// The credential is somebody else's, theirs to fix: an account refusing it logs at warn, where ours logs at error.
+	pub fn theirs(mut self) -> Self {
+		self.theirs = true;
+		self
+	}
+
+	pub(crate) async fn call(&self, config: &AppConfig, request: &Request<'_>) -> Result<Answer, Failure> {
+		let start = std::time::Instant::now();
+		let mut answer = match self.provider {
+			Provider::Claude => claude::call(self, config, request).await,
+			Provider::OpenAi => openai::call(self, config, request).await,
+			Provider::Ollama => ollama::call(self, request).await,
+			Provider::Fal | Provider::Local => Err(Unrecoverable::new_unsupported("a conversation", format!("{} makes masks, through `segment::segment`", self.model)).into()),
+		}?;
+		answer.response.duration = start.elapsed();
+		Ok(answer)
+	}
+
+	/// The failure as our logs tell it. `told`: this credential's refusal already was, in this call.
+	pub(crate) fn tell(&self, failure: &Failure, told: bool) {
+		let level = match failure {
+			Failure::Recoverable(Recoverable::Transport(Transport::Unreachable { .. })) if self.provider == Provider::Ollama => Level::INFO,
+			Failure::Recoverable(_) => Level::WARN,
+			Failure::Unrecoverable(u) => match u {
+				Unrecoverable::MissingToken { .. } | Unrecoverable::Cli(Cli::NotInstalled { .. }) => Level::INFO,
+				Unrecoverable::ModelUnavailable { .. } if self.provider == Provider::Ollama => Level::INFO,
+				Unrecoverable::ModelUnavailable { .. } => Level::ERROR,
+				Unrecoverable::Auth { .. } | Unrecoverable::Quota { .. } | Unrecoverable::GeoBlocked { .. } => match self.theirs || told {
+					true => Level::WARN,
+					false => Level::ERROR,
+				},
+				Unrecoverable::Cli(Cli::Exit { stderr: said, .. } | Cli::Failed { message: said, .. }) => match told || said.contains("limit") {
+					true => Level::WARN, // a spent window: the CLI has no other word for it
+					false => Level::ERROR,
+				},
+				Unrecoverable::Cli(Cli::Empty { .. })
+				| Unrecoverable::ContextLength { .. }
+				| Unrecoverable::Unsupported { .. }
+				| Unrecoverable::Refused { .. }
+				| Unrecoverable::Schema { .. }
+				| Unrecoverable::Empty { .. }
+				| Unrecoverable::Other { .. } => Level::WARN,
+			},
+		};
+		let (provider, model) = (self.provider, self.model);
+		match level {
+			Level::ERROR => tracing::error!(%provider, model, reason = %failure, "a dead source"),
+			Level::WARN => tracing::warn!(%provider, model, reason = %failure, "a source failed"),
+			_ => tracing::info!(%provider, model, reason = %failure, "a source not set up here"),
+		}
+	}
+}
+impl std::fmt::Debug for Source {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("Source")
+			.field("provider", &self.provider)
+			.field("model", &self.model)
+			.field("origin", &self.origin)
+			.field("theirs", &self.theirs)
+			.finish_non_exhaustive()
+	}
+}
+impl From<Model> for Source {
+	fn from(model: Model) -> Self {
+		match model {
+			Model::Translate => Self::new(Provider::Ollama, "translategemma:4b"),
+			Model::Cheap => Self::new(Provider::Ollama, "qwen3.5:4b"),
+			Model::Fast | Model::Video => OpenAiModel::Luna.into(),
+			Model::Medium => ClaudeModel::Sonnet5_5.into(),
+			Model::Slow => ClaudeModel::Opus5_5.into(),
+			Model::PriceInsensitive => ClaudeModel::Fable5_1.into(),
+			Model::Segment => Self::new(Provider::Fal, segment::Model::Sam3_1.id()),
+			Model::SegmentLocal => Self::new(Provider::Local, segment::Model::Sam2_1.id()),
+		}
+	}
+}
+impl From<ClaudeModel> for Source {
+	fn from(model: ClaudeModel) -> Self {
+		Self::new(Provider::Claude, model.to_str())
+	}
+}
+impl From<OpenAiModel> for Source {
+	fn from(model: OpenAiModel) -> Self {
+		Self::new(Provider::OpenAi, model.to_str())
+	}
+}
+
+/// What a call walks.
+#[derive(Clone)]
+pub(crate) enum Path {
+	/// The tiers from this one down.
+	Tiers(Model),
+	/// Exactly these, none skipped, so an attempt's place is its source's.
+	Chain(Vec<Source>),
+}
+impl Path {
+	/// What was asked for, as the logs name it.
+	pub fn requested(&self) -> String {
 		match self {
-			Self::Ollama(name) => name,
-			Self::OpenAi(model) => model.to_str(),
-			Self::Claude(model) => model.to_str(),
-			Self::Segment(model) => model.id(),
+			Self::Tiers(entry) => format!("{entry:?}"),
+			Self::Chain(sources) => sources[0].model.to_string(),
 		}
 	}
 }
 
-/// Follows [`Model::next`] from `entry`. A provider that failed for good is skipped for the rest of this call;
-/// nothing about it outlives the call.
-pub(crate) async fn walk<F, Fut>(entry: Model, mut attempt: F) -> crate::Result<Response>
+pub(crate) struct Walked<T> {
+	pub answer: T,
+	pub source: Source,
+	pub failed: Vec<Attempt>,
+}
+
+/// A provider whose account failed for good is skipped for the rest of a walk down the tiers; nothing about it outlives
+/// the call.
+pub(crate) async fn walk<T, F, Fut>(path: &Path, mut attempt: F) -> crate::Result<Walked<T>>
 where
-	F: FnMut(Model) -> Fut,
-	Fut: Future<Output = Result<Response, Failure>>, {
-	let mut dead: Vec<Provider> = Vec::new();
-	let mut attempts: Vec<Attempt> = Vec::new();
-	let mut next = Some(entry);
-	while let Some(model) = next {
-		next = model.next();
-		let deployment = model.deployment();
-		if dead.contains(&deployment.provider()) {
+	F: FnMut(Source) -> Fut,
+	Fut: Future<Output = Result<T, Failure>>, {
+	let sources: Vec<Source> = match path {
+		Path::Tiers(entry) => std::iter::successors(Some(*entry), |m| m.next()).map(Source::from).collect(),
+		Path::Chain(sources) => sources.clone(),
+	};
+	let mut dead: Vec<(Provider, Option<String>)> = Vec::new();
+	let mut failed: Vec<Attempt> = Vec::new();
+	for source in sources {
+		let account = (source.provider, source.token.clone());
+		let told = dead.contains(&account);
+		if told && matches!(path, Path::Tiers(_)) {
 			continue;
 		}
-		if let Some(failed) = attempts.last() {
-			tracing::info!(provider = %deployment.provider(), model = deployment.name(), replacing = failed.model, "falling back");
-		}
-		let failure = match attempt(model).await {
-			Ok(response) => return Ok(response),
+		let failure = match attempt(source.clone()).await {
+			Ok(answer) => {
+				if let Some(last) = failed.last() {
+					let (requested, replacing) = (path.requested(), last.model);
+					match path {
+						Path::Tiers(_) => tracing::warn!(requested, provider = %source.provider, answering = source.model, replacing, "falling back: a tier below the one asked for answers"),
+						Path::Chain(_) => tracing::info!(requested, provider = %source.provider, answering = source.model, replacing, "falling back"),
+					}
+				}
+				return Ok(Walked { answer, source, failed });
+			}
 			Err(failure) => failure,
 		};
-		tracing::warn!(provider = %deployment.provider(), model = deployment.name(), %failure, "climbing past a failed model");
+		source.tell(&failure, told);
 		if let Failure::Unrecoverable(u) = &failure
-			&& !model_scoped(u)
+			&& !node_scoped(u)
 		{
-			dead.push(deployment.provider());
+			dead.push(account);
 		}
-		attempts.push(Attempt {
-			provider: deployment.provider(),
-			model: deployment.name(),
+		failed.push(Attempt {
+			provider: source.provider,
+			model: source.model,
 			failure,
 		});
 	}
-	assert!(!attempts.is_empty(), "the entry model is always attempted");
-	let recoverable = attempts.iter().any(|a| matches!(a.failure, Failure::Recoverable(_)));
-	let exhausted = Exhausted { attempts };
+	assert!(!failed.is_empty(), "the first source is always attempted");
+	// nobody serves ollama on most machines, and waiting does not change that
+	let unserved = |a: &Attempt| a.provider == Provider::Ollama && matches!(a.failure, Failure::Recoverable(Recoverable::Transport(Transport::Unreachable { .. })));
+	let recoverable = failed.iter().enumerate().any(|(i, a)| matches!(a.failure, Failure::Recoverable(_)) && (i == 0 || !unserved(a)));
+	let exhausted = Exhausted { attempts: failed };
 	Err(match recoverable {
 		true => Error::Recoverable(exhausted),
 		false => Error::Unrecoverable(exhausted),
@@ -185,9 +273,13 @@ where
 }
 
 /// About the model, not the account behind it: `translategemma` not being pulled says nothing about `qwen`.
-fn model_scoped(u: &Unrecoverable) -> bool {
+fn node_scoped(u: &Unrecoverable) -> bool {
 	match u {
-		Unrecoverable::ModelUnavailable { .. } | Unrecoverable::ContextLength { .. } | Unrecoverable::Unsupported { .. } | Unrecoverable::Cli(crate::Cli::Empty { .. }) => true,
+		Unrecoverable::ModelUnavailable { .. }
+		| Unrecoverable::ContextLength { .. }
+		| Unrecoverable::Unsupported { .. }
+		| Unrecoverable::Empty { .. }
+		| Unrecoverable::Cli(Cli::Empty { .. }) => true,
 		Unrecoverable::MissingToken { .. }
 		| Unrecoverable::Auth { .. }
 		| Unrecoverable::Quota { .. }
@@ -204,70 +296,83 @@ mod tests {
 	use std::cell::RefCell;
 
 	use super::*;
-	use crate::{ThinkingLevel, Transport};
 
-	fn answered(model: Model) -> Response {
-		Response {
-			text: "pong".to_string(),
-			cost_cents: 0.,
-			duration: std::time::Duration::ZERO,
-			overhead: std::time::Duration::ZERO,
-			model: model.deployment().name().to_string(),
-			thinking: ThinkingLevel::None,
-			usage: crate::Usage::default(),
-		}
-	}
-
-	async fn transport_failure() -> Failure {
+	async fn unreachable() -> Failure {
 		let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
 		let source = reqwest::Client::new().get("http://127.0.0.1:1").send().await.expect_err("nothing listens on port 1");
 		Transport::classify(Provider::Ollama, source).into()
 	}
 
-	/// Runs the walk with `fail` deciding each model's outcome, and returns what it did with the models it tried.
-	async fn run(entry: Model, fail: impl AsyncFn(Model) -> Option<Failure>) -> (crate::Result<Response>, Vec<Model>) {
+	/// Runs the walk with `fail` deciding each source's outcome, and returns the model that answered with those tried.
+	async fn run(entry: Model, fail: impl AsyncFn(&Source) -> Option<Failure>) -> (crate::Result<&'static str>, Vec<&'static str>) {
 		let tried = RefCell::new(Vec::new());
-		let result = walk(entry, |model| {
-			tried.borrow_mut().push(model);
-			let outcome = fail(model);
-			async move { outcome.await.map_or_else(|| Ok(answered(model)), Err) }
+		let result = walk(&Path::Tiers(entry), async |source: Source| {
+			tried.borrow_mut().push(source.model);
+			fail(&source).await.map_or(Ok(()), Err)
 		})
 		.await;
-		(result, tried.into_inner())
+		(result.map(|w| w.source.model), tried.into_inner())
+	}
+
+	const fn name(model: Model) -> &'static str {
+		match model {
+			Model::PriceInsensitive => ClaudeModel::Fable5_1.to_str(),
+			Model::Slow => ClaudeModel::Opus5_5.to_str(),
+			Model::Medium => ClaudeModel::Sonnet5_5.to_str(),
+			Model::Fast => OpenAiModel::Luna.to_str(),
+			Model::Cheap => "qwen3.5:4b",
+			Model::Translate => "translategemma:4b",
+			_ => panic!("not on the path"),
+		}
 	}
 
 	#[tokio::test]
-	async fn spent_openai_account_hands_over_to_claude() {
-		let (result, tried) = run(Model::Fast, async |model| (model == Model::Fast).then(|| Unrecoverable::new_quota("no credits".into()).into())).await;
-		assert_eq!(result.unwrap().model, Model::Medium.deployment().name());
-		assert_eq!(tried, [Model::Fast, Model::Medium]);
+	async fn rejected_claude_credentials_hand_down_past_every_claude_model() {
+		let (result, tried) = run(Model::PriceInsensitive, async |s| {
+			(s.provider == Provider::Claude).then(|| Unrecoverable::new_auth("revoked".into()).into())
+		})
+		.await;
+		assert_eq!(result.unwrap(), name(Model::Fast));
+		assert_eq!(tried, [name(Model::PriceInsensitive), name(Model::Fast)]);
 	}
 
 	#[tokio::test]
-	async fn rejected_claude_credentials_skip_every_claude_model() {
-		let (result, tried) = run(Model::Medium, async |_| Some(Unrecoverable::new_auth("revoked".into()).into())).await;
-		assert_eq!(tried, [Model::Medium]);
+	async fn overloads_walk_every_tier_down() {
+		let (result, tried) = run(Model::PriceInsensitive, async |_| Some(Recoverable::new_overloaded("busy".into()).into())).await;
+		assert_eq!(tried, [Model::PriceInsensitive, Model::Slow, Model::Medium, Model::Fast, Model::Cheap].map(name));
+		assert!(matches!(result, Err(Error::Recoverable(_))), "{result:?}");
+	}
+
+	#[tokio::test]
+	async fn an_account_refusing_for_good_is_unrecoverable_where_nobody_serves_ollama() {
+		let (result, tried) = run(Model::Fast, async |s| {
+			Some(match s.provider {
+				Provider::Ollama => unreachable().await,
+				_ => Unrecoverable::new_quota("no credits".into()).into(),
+			})
+		})
+		.await;
+		assert_eq!(tried, [name(Model::Fast), name(Model::Cheap)]);
 		let Err(Error::Unrecoverable(exhausted)) = result else {
 			panic!("an account refusing for good is unrecoverable, got {result:?}");
 		};
-		assert_eq!(exhausted.attempts.len(), 1);
-		assert_eq!(exhausted.attempts[0].provider, Provider::Claude);
+		assert_eq!(exhausted.attempts.iter().map(|a| a.provider).collect::<Vec<_>>(), [Provider::OpenAi, Provider::Ollama]);
 	}
 
 	#[tokio::test]
 	async fn missing_local_model_does_not_take_its_provider_down() {
-		let (result, tried) = run(Model::Translate, async |model| {
-			(model == Model::Translate).then(|| Unrecoverable::new_model_unavailable("not pulled".into(), String::new()).into())
+		let (result, tried) = run(Model::Translate, async |s| {
+			(s.model == name(Model::Translate)).then(|| Unrecoverable::new_model_unavailable("not pulled".into(), String::new()).into())
 		})
 		.await;
-		assert_eq!(result.unwrap().model, Model::Cheap.deployment().name());
-		assert_eq!(tried, [Model::Translate, Model::Cheap]);
+		assert_eq!(result.unwrap(), name(Model::Cheap));
+		assert_eq!(tried, [name(Model::Translate), name(Model::Cheap)]);
 	}
 
 	#[tokio::test]
 	async fn transport_everywhere_is_recoverable() {
-		let (result, tried) = run(Model::Translate, async |_| Some(transport_failure().await)).await;
-		assert_eq!(tried, [Model::Translate, Model::Cheap, Model::Fast, Model::Medium, Model::Slow, Model::PriceInsensitive]);
+		let (result, tried) = run(Model::Translate, async |_| Some(unreachable().await)).await;
+		assert_eq!(tried, [name(Model::Translate), name(Model::Cheap)]);
 		assert!(matches!(result, Err(Error::Recoverable(_))), "{result:?}");
 	}
 }

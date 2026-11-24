@@ -21,6 +21,10 @@ pub enum Error {
 	#[error(transparent)]
 	#[diagnostic(transparent)]
 	Unrecoverable(Exhausted),
+	/// The source a conversation is held to failed, and no other may stand in.
+	#[error(transparent)]
+	#[diagnostic(transparent)]
+	Interrupted(Interrupted),
 	/// Local tooling (ffmpeg, whisper, the filesystem); never reached a model.
 	#[error(transparent)]
 	Other(#[from] Report),
@@ -48,6 +52,29 @@ impl miette::Diagnostic for Attempt {
 
 	fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
 		self.failure.help()
+	}
+}
+
+/// A conversation with tool calls stays on the source that made them: see [`Step`](crate::Step).
+#[non_exhaustive]
+#[derive(Debug, thiserror::Error)]
+#[error("{} `{}` failed on round {round} of its tool calls", attempt.provider, attempt.model)]
+pub struct Interrupted {
+	/// Answered rounds it was given, this call's included.
+	pub round: usize,
+	#[source]
+	pub attempt: Attempt,
+}
+impl miette::Diagnostic for Interrupted {
+	fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+		self.attempt.code()
+	}
+
+	fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+		Some(Box::new(match self.attempt.failure {
+			Failure::Recoverable(_) => "resume the same step again, with the same results",
+			Failure::Unrecoverable(_) => "ask again from the first step: rounds answered so far are not carried to another model",
+		}))
 	}
 }
 
@@ -82,6 +109,7 @@ impl Failure {
 			402 => Unrecoverable::new_quota(message).into(),
 			404 => Unrecoverable::new_model_unavailable(message, model_help).into(),
 			413 => Unrecoverable::new_context_length(message).into(),
+			400 if provider == Provider::Claude && message.contains("prompt is too long") => Unrecoverable::new_context_length(message).into(), // its `type` is any bad request's
 			429 if code.contains("quota") || code.contains("billing") => Unrecoverable::new_quota(message).into(),
 			429 => Recoverable::new_rate_limited(message, retry_after.and_then(|s| s.trim().parse().ok()).map(std::time::Duration::from_secs)).into(),
 			451 => Unrecoverable::new_geo_blocked(message).into(),
@@ -90,6 +118,16 @@ impl Failure {
 			_ if code.contains("model_not_found") || code.contains("model_not_available") => Unrecoverable::new_model_unavailable(message, model_help).into(),
 			status => Unrecoverable::new_other(status, truncate(body)).into(),
 		}
+	}
+
+	pub(crate) fn of_response(provider: Provider, status: u16, headers: &reqwest::header::HeaderMap, body: &str) -> Self {
+		let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()); // one that is not text is none of those read here
+		if provider == Provider::Claude && status == 429 && header("anthropic-ratelimit-unified-status") == Some("rejected") {
+			let message = Envelope::parse(body).message.unwrap_or_else(|| truncate(body));
+			let resets = header("anthropic-ratelimit-unified-reset").and_then(|s| s.parse().ok()); // unreadable is unknown
+			return Recoverable::new_limit_reached(message, resets.map(|s| std::time::UNIX_EPOCH + std::time::Duration::from_secs(s))).into();
+		}
+		Self::classify(provider, status, header("retry-after"), body)
 	}
 }
 impl From<Transport> for Failure {
@@ -115,6 +153,11 @@ pub enum Recoverable {
 	#[error("rate-limiting this key: {message}")]
 	#[diagnostic(code(ask_llm::api::rate_limited), help("back off and retry; `retry_after` carries the provider's own wait when it sent one"))]
 	RateLimited { message: String, retry_after: Option<std::time::Duration> },
+	/// A subscription's window is spent.
+	#[leaf]
+	#[error("the account reached its limit: {message}")]
+	#[diagnostic(code(ask_llm::api::limit_reached), help("the window resets at `resets`, when the provider told it"))]
+	LimitReached { message: String, resets: Option<std::time::SystemTime> },
 	#[leaf]
 	#[error("overloaded: {message}")]
 	#[diagnostic(code(ask_llm::api::overloaded), help("the provider is failing on its own side; retry on a backoff"))]
@@ -135,7 +178,10 @@ pub enum Unrecoverable {
 	},
 	#[leaf]
 	#[error("rejected the credentials: {message}")]
-	#[diagnostic(code(ask_llm::api::auth), help("rotate the key, or check `OPENAI_API_KEY` / `openai_token` in ~/.config/ask_llm.nix"))]
+	#[diagnostic(
+		code(ask_llm::api::auth),
+		help("rotate the credential, or check `claude_token`, `openai_token` / `OPENAI_API_KEY` in ~/.config/ask_llm.nix")
+	)]
 	Auth { message: String },
 	#[leaf]
 	#[error("the account is out of credit: {message}")]
@@ -171,6 +217,12 @@ pub enum Unrecoverable {
 	#[error("refused to answer: {reason}")]
 	#[diagnostic(code(ask_llm::refused), help("the request tripped the provider's content policy; rephrase it"))]
 	Refused { reason: String },
+	/// Thinking is billed against the output budget and can consume all of it, which would otherwise read as "the model
+	/// had nothing to say".
+	#[leaf]
+	#[error("returned no text (stopped for `{stop}`)")]
+	#[diagnostic(code(ask_llm::empty), help("thinking ate the whole output budget; lower `ThinkingLevel` or raise `max_tokens`"))]
+	Empty { stop: String },
 	/// The provider answered with a shape its own docs do not describe.
 	#[leaf]
 	#[error("failed to parse the response: {source}\n{body}")]
@@ -225,14 +277,14 @@ impl Transport {
 	}
 }
 
-/// Claude is reached by shelling out, so its failures are a process's, not a socket's.
+/// A device login's plain text goes through the `claude` CLI, whose failures are a process's, not a socket's.
 #[non_exhaustive]
 #[wrap_err]
 #[derive(Debug, miette::Diagnostic, thiserror::Error)]
 pub enum Cli {
 	#[leaf]
 	#[error("the `claude` binary could not be run: {source}")]
-	#[diagnostic(code(ask_llm::cli::not_installed), help("`claude` is not on PATH; every Claude node routes through it"))]
+	#[diagnostic(code(ask_llm::cli::not_installed), help("`claude` is not on PATH, and a device login's plain text routes through it"))]
 	NotInstalled { source: std::io::Error },
 	#[leaf]
 	#[error("`claude` exited with {status}: {stderr}")]
@@ -242,8 +294,7 @@ pub enum Cli {
 	#[error("`claude` reported a failure ({subtype}): {message}")]
 	#[diagnostic(code(ask_llm::cli::failed), help("the CLI reached Anthropic and was refused; check `claude /status` for the subscription"))]
 	Failed { subtype: String, message: String },
-	/// Thinking is billed against the output budget and can consume all of it, which would otherwise read
-	/// as "the model had nothing to say" (see CHANGELOG v3.0.1).
+	/// [`Unrecoverable::Empty`], off the CLI.
 	#[leaf]
 	#[error("`claude` returned no text (stop_reason: {stop_reason})")]
 	#[diagnostic(code(ask_llm::cli::empty), help("thinking ate the whole output budget; lower `ThinkingLevel` or raise `max_tokens`"))]

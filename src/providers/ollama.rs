@@ -1,122 +1,51 @@
-use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
-use crate::{Backend, FORCE_JSON_SUFFIX, Failure, Provider, Request, Response, ThinkingLevel, Transport, Unrecoverable};
+use genai::{
+	adapter::AdapterKind,
+	chat::{ChatMessage, MessageContent, ReasoningEffort, ToolResponse},
+	resolver::AuthData,
+};
 
-pub(crate) struct Ollama {
-	pub model: String,
-	pub url: String,
-}
-impl Ollama {
-	async fn do_conversation(&self, request: &Request<'_>) -> Result<Response, Failure> {
-		if !request.files.is_empty() {
-			return Err(Unrecoverable::new_unsupported("file attachments", "drop the attachment, or pick a remote `Model`".to_string()).into());
-		}
+use crate::{
+	ContentPart, Failure, Request, Source, ThinkingLevel, Unrecoverable,
+	wire::{self, Answer},
+};
 
-		let mut messages: Vec<OllamaMessage> = Vec::new();
-
-		for message in &request.conversation.0 {
-			let text = match &message.content {
-				crate::MessageContent::Text(t) => t.clone(),
-				_ => {
-					return Err(Unrecoverable::new_unsupported("images and documents", "pick a remote `Model`".to_string()).into());
-				}
-			};
-			messages.push(OllamaMessage {
-				role: <&str>::from(message.role).to_string(),
-				content: text,
-			});
-		}
-
-		if request.force_json
-			&& let Some(last) = messages.last_mut()
-			&& last.role == "user"
-		{
-			last.content.push_str(FORCE_JSON_SUFFIX);
-		}
-
-		let think = !matches!(request.thinking, ThinkingLevel::None);
-
-		let mut ollama_request = OllamaRequest {
-			model: self.model.clone(),
-			messages,
-			stream: false,
-			think,
-			options: OllamaOptions {
-				temperature: 0.0,
-				num_predict: request.max_tokens,
-				stop: None,
-			},
-		};
-
-		if let Some(ref seqs) = request.stop_sequences {
-			ollama_request.options.stop = Some(seqs.iter().map(|s| s.to_string()).collect());
-		}
-
-		let _ = rustls::crypto::ring::default_provider().install_default(); // Err: a provider is already installed
-		let response = reqwest::Client::new()
-			.post(&self.url)
-			.json(&ollama_request)
-			.send()
-			.await
-			.map_err(|e| Transport::classify(Provider::Ollama, e))?;
-		let parsed: OllamaResponse = crate::json_response(response, Provider::Ollama).await?;
-
-		let overhead_nanos = parsed.load_duration + parsed.prompt_eval_duration;
-		Ok(Response {
-			text: parsed.message.content,
-			cost_cents: 0.0,
-			duration: std::time::Duration::ZERO,
-			overhead: std::time::Duration::from_nanos(overhead_nanos),
-			model: self.model.clone(),
-			thinking: request.thinking,
-			usage: crate::Usage {
-				input: parsed.prompt_eval_count,
-				output: parsed.eval_count,
-				..Default::default()
-			},
-		})
+pub(crate) async fn call(source: &Source, request: &Request<'_>) -> Result<Answer, Failure> {
+	if !request.files.is_empty() {
+		return Err(Unrecoverable::new_unsupported("file attachments", "drop the attachment, or pick a remote `Model`".to_string()).into());
 	}
-}
-
-impl Backend for Ollama {
-	fn conversation<'a>(&'a self, request: &'a Request<'a>) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Response, Failure>> + Send + 'a>> {
-		Box::pin(self.do_conversation(request))
+	if !request.conversation.0.iter().all(|m| m.content.parts().iter().all(|p| matches!(p, ContentPart::Text(_)))) {
+		return Err(Unrecoverable::new_unsupported("images and documents", "pick a remote `Model`".to_string()).into());
 	}
-}
 
-#[derive(Debug, Serialize)]
-struct OllamaRequest {
-	model: String,
-	messages: Vec<OllamaMessage>,
-	stream: bool,
-	think: bool,
-	options: OllamaOptions,
-}
+	let mut chat = wire::tools(request);
+	chat.messages = wire::messages(request)?;
+	for round in request.rounds {
+		chat.messages.push(ChatMessage::assistant(round.turn.said.clone()));
+		for (call, result) in round.calls.iter().zip(&round.results) {
+			let response = ToolResponse::new(&call.id, result);
+			chat.messages.push(ChatMessage::tool(MessageContent::from_tool_responses(vec![response]))); // of several in one message genai keeps the last
+		}
+	}
 
-#[derive(Debug, Serialize)]
-struct OllamaOptions {
-	temperature: f32,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	num_predict: Option<usize>,
-	#[serde(skip_serializing_if = "Option::is_none")]
-	stop: Option<Vec<String>>,
-}
+	let mut options = wire::options(request).with_temperature(0.).with_reasoning_effort(match request.thinking {
+		ThinkingLevel::None => ReasoningEffort::Zero,
+		_ => ReasoningEffort::Budget(0), // `think: true`: most models take no level
+	});
+	options.max_tokens = request.max_tokens.map(|n| u32::try_from(n).expect("a token cap fits u32"));
+	if let Some(sequences) = &request.stop_sequences {
+		options = options.with_stop_sequences(sequences.iter().map(|s| s.to_string()).collect());
+	}
 
-#[derive(Debug, Deserialize, Serialize)]
-struct OllamaMessage {
-	role: String,
-	content: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct OllamaResponse {
-	message: OllamaMessage,
-	#[serde(default)]
-	load_duration: u64,
-	#[serde(default)]
-	prompt_eval_duration: u64,
-	#[serde(default)] // ollama omits zero counts
-	prompt_eval_count: u32,
-	#[serde(default)]
-	eval_count: u32,
+	let origin = source.origin.as_deref().unwrap_or("http://localhost:11434");
+	let mut response = wire::exec(source, AdapterKind::Ollama, format!("{origin}/"), AuthData::None, chat, options).await?;
+	// it omits what is zero
+	response.usage.prompt_tokens.get_or_insert(0);
+	response.usage.completion_tokens.get_or_insert(0);
+	let raw = response.captured_raw_body.as_ref().expect("asked for in `options`");
+	let nanos = |field: &str| raw[field].as_u64().unwrap_or(0);
+	let overhead = Duration::from_nanos(nanos("load_duration") + nanos("prompt_eval_duration"));
+	let usage = wire::usage(&response)?;
+	wire::answer(source, request, response, usage, overhead)
 }

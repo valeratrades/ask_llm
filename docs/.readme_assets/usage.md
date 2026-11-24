@@ -3,7 +3,9 @@ Provides 2 simple primitives:
 
 `oneshot` and `conversation` functions, which follow standard logic for llm interactions, that most providers share.
 
-Then the model is automatically chosen based on whether we care about cost/speed/quality. Currently this is expressed by choosing `Model::`{`Fast`/`Medium`/`Slow`}, which enters a fixed fallback graph of deployments (see [ARCHITECTURE.md](docs/ARCHITECTURE.md)): a node that fails hands the request to the next more capable one. 
+Then the model is automatically chosen based on whether we care about cost/speed/quality. Currently this is expressed by choosing `Model::`{`Fast`/`Medium`/`Slow`}, which enters a fixed fallback graph of deployments (see [ARCHITECTURE.md](docs/ARCHITECTURE.md)): a node that fails hands the request to the tier below. `Client::fallback_chain` names the exact models instead, each on its own credential if need be.
+
+`Client::step` is one step of an agent loop: tools in, calls out, `Step::resume` with what they answered. `Client::json_schema` holds an answer to a schema.
 
 When used as a lib, import with
 ```toml

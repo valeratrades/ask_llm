@@ -7,7 +7,7 @@ use std::{
 use eyre::{bail, eyre};
 use tokio::process::Command;
 
-use crate::{Client, Conversation, Error, Failure, FileAttachment, Model, Recoverable, Result, Role};
+use crate::{Client, Conversation, Error, Failure, FileAttachment, Json, Model, Recoverable, Result, Role};
 
 /// The scene score past which ffmpeg counts a frame as the picture changing.
 const SCENE: f64 = 0.06;
@@ -80,6 +80,7 @@ pub struct Watched {
 	pub speech: Vec<Said>,
 	pub shown: Vec<Shown>,
 	pub frames_read: usize,
+	/// NaN where a read was answered by a model we hold no price of.
 	pub cost_cents: f32,
 	/// `None` where nothing was read: no picture, or none of it picked.
 	pub model: Option<String>,
@@ -130,7 +131,7 @@ impl Client {
 			Pick::Changes => changes(media, scratch.path(), gap, floor, None).await?,
 			Pick::Likely { every } => {
 				let (spans, answer) = self.likely(media, &spec.title, spec.about.as_deref(), &watched.speech).await?;
-				watched.cost_cents += answer.cost_cents;
+				watched.cost_cents += answer.cents.unwrap_or(f32::NAN);
 				watched.picked_by = Some(answer.model);
 				let mut frames = Vec::new();
 				for (i, span) in spans.into_iter().enumerate() {
@@ -174,10 +175,10 @@ impl Client {
 			);
 			let files = batch.iter().map(|(_, frame)| webp(frame)).collect::<eyre::Result<Vec<_>>>()?;
 			let answer = self.patiently(&prompt, &files, &ENTRIES).await?;
-			watched.cost_cents += answer.cost_cents;
+			watched.cost_cents += answer.cents.unwrap_or(f32::NAN);
 			watched.model.get_or_insert(answer.model.clone());
 
-			let listed: Answer = serde_json::from_str(&answer.text).map_err(|e| eyre!("{}: the answer is not the json asked for: {e}\n{}", answer.model, answer.text))?;
+			let listed: Answer = answer.json()?;
 			for Entry { t_secs, shown, on_screen_text } in listed.entries {
 				let Some((_, picked)) = batch.iter().find(|(t, _)| *t == t_secs) else {
 					return Err(eyre!("{}: an entry at {t_secs}s, which is no frame it was shown — {shown}", answer.model).into());
@@ -212,7 +213,7 @@ impl Client {
 			about.map(|a| format!("\nAbout it:\n\n{}\n", a.trim())).unwrap_or_default(),
 		);
 		let answer = self.clone().model(Model::Fast).patiently(&prompt, &[], &SPANS).await?;
-		let listed: Spans = serde_json::from_str(&answer.text).map_err(|e| eyre!("{}: the answer is not the json asked for: {e}\n{}", answer.model, answer.text))?;
+		let listed: Spans = answer.json()?;
 		let mut spans: Vec<(f64, f64)> = Vec::new();
 		for Span { from_secs, to_secs, why } in listed.spans {
 			if !(0. <= from_secs && from_secs < to_secs && to_secs <= duration) {
@@ -238,7 +239,7 @@ impl Client {
 		conv.add(Role::User, prompt);
 		//LOOP: bounded by the attempts
 		for attempt in 1..=ATTEMPTS {
-			let wait = match self.send(&conv, files, true, Some(schema)).await {
+			let wait = match self.send(&conv, files, Json::Schema(schema)).await {
 				Err(Error::Recoverable(exhausted)) if attempt < ATTEMPTS => exhausted
 					.attempts
 					.iter()

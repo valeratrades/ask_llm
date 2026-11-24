@@ -1,4 +1,4 @@
-//! A tier whose entry provider was never given a key climbs to the next node instead of failing the call.
+//! A tier whose entry provider was never given a key hands the call to the one below instead of failing it. Needs `ollama serve`.
 use ask_llm::{Client, Model, config::AppConfig};
 
 #[tokio::main]
@@ -10,6 +10,6 @@ async fn main() {
 		.ask("Reply with the single word: pong")
 		.await
 		.unwrap_or_else(|e| panic!("{:?}", miette::Report::new(e)));
-	assert_eq!(response.model, "claude-opus-5-5", "Luna has no key, so Medium is the next model up");
+	assert_eq!(response.model, "qwen3.5:4b", "Luna has no key, so Cheap is the next model down");
 	println!("{:?} {response}", response.text);
 }
